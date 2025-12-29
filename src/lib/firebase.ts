@@ -10,39 +10,57 @@ type Event = {
   maxApproved: number;
   approvedCount: number;
   isOpen: boolean;
-  startAt?: any;
 };
 
 export default function HomePage() {
   const [events, setEvents] = useState<Event[]>([]);
+  const [selectedEvent, setSelectedEvent] = useState<string | null>(null);
+
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
-  const [selectedEvent, setSelectedEvent] = useState<string | null>(null);
-  const [message, setMessage] = useState("");
+
+  const [message, setMessage] = useState<string>("");
 
   useEffect(() => {
-    const loadEvents = async () => {
+    const load = async () => {
       const snap = await getDocs(collection(db, "events"));
       const data = snap.docs.map((d) => ({
         id: d.id,
         ...(d.data() as Omit<Event, "id">),
-      }));
+      })) as Event[];
+
+      // kun åbne events
       setEvents(data.filter((e) => e.isOpen));
     };
 
-    loadEvents();
+    load();
   }, []);
 
   const submit = async () => {
     setMessage("");
-    if (!username || !email || !selectedEvent) {
-      setMessage("Udfyld alle felter");
+
+    if (!selectedEvent) {
+      setMessage("Vælg et event først");
+      return;
+    }
+
+    const cleanName = username.trim();
+    const cleanEmail = email.trim();
+
+    if (!cleanName || !cleanEmail) {
+      setMessage("Udfyld navn og e-mail");
+      return;
+    }
+
+    // helt simpel email-check (nok til at stoppe de værste fejl)
+    if (!cleanEmail.includes("@") || !cleanEmail.includes(".")) {
+      setMessage("Skriv en gyldig e-mail");
       return;
     }
 
     await addDoc(collection(db, "events", selectedEvent, "requests"), {
-      username,
-      email,
+      username: cleanName,
+      email: cleanEmail,
       status: "pending",
       createdAt: serverTimestamp(),
     });
@@ -58,38 +76,39 @@ export default function HomePage() {
       <div style={styles.container}>
         <h1 style={styles.h1}>Saunagus – tilmelding</h1>
 
-        {events.length === 0 && (
+        {events.length === 0 ? (
           <p style={styles.muted}>Ingen åbne events lige nu.</p>
-        )}
+        ) : (
+          <div style={styles.list}>
+            {events.map((e) => {
+              const isFull = (e.approvedCount ?? 0) >= (e.maxApproved ?? 0);
 
-        <div style={styles.list}>
-          {events.map((e) => {
-            const isFull = e.approvedCount >= e.maxApproved;
+              return (
+                <div key={e.id} style={styles.card}>
+                  <div style={styles.cardTop}>
+                    <h3 style={styles.h3}>{e.title}</h3>
+                    <p style={styles.muted}>
+                      Pladser: <b>{e.approvedCount ?? 0}</b> /{" "}
+                      <b>{e.maxApproved ?? 0}</b>
+                      {isFull ? " (FULDT)" : ""}
+                    </p>
+                  </div>
 
-            return (
-              <div key={e.id} style={styles.card}>
-                <div style={styles.cardTop}>
-                  <h3 style={styles.h3}>{e.title}</h3>
-                  <p style={styles.muted}>
-                    Pladser: <b>{e.approvedCount}</b> / <b>{e.maxApproved}</b>
-                  </p>
+                  <button
+                    style={{
+                      ...styles.primaryBtn,
+                      ...(isFull ? styles.primaryBtnDisabled : {}),
+                    }}
+                    disabled={isFull}
+                    onClick={() => setSelectedEvent(e.id)}
+                  >
+                    {isFull ? "Eventet er fuldt" : "Vælg dette event"}
+                  </button>
                 </div>
-
-                <button
-                  style={{
-                    ...styles.primaryBtn,
-                    opacity: isFull ? 0.5 : 1,
-                    cursor: isFull ? "not-allowed" : "pointer",
-                  }}
-                  disabled={isFull}
-                  onClick={() => setSelectedEvent(e.id)}
-                >
-                  {isFull ? "Fuldt booket" : "Vælg dette event"}
-                </button>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        )}
 
         {selectedEvent && (
           <section style={styles.section}>
@@ -106,9 +125,10 @@ export default function HomePage() {
             <label style={styles.label}>E-mail</label>
             <input
               style={styles.input}
-              placeholder="Fx dig@domain.dk"
+              placeholder="Fx thomas@email.dk"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
+              type="email"
               inputMode="email"
               autoComplete="email"
             />
@@ -144,11 +164,13 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: 12,
   },
-  h1: { fontSize: 28, margin: 0 },
+  h1: { fontSize: 28, margin: 0, textAlign: "center" },
   h2: { fontSize: 20, margin: "8px 0 0" },
   h3: { fontSize: 16, margin: 0 },
   muted: { margin: 0, opacity: 0.75 },
+
   list: { display: "flex", flexDirection: "column", gap: 10 },
+
   card: {
     border: "1px solid #e5e5e5",
     borderRadius: 10,
@@ -158,6 +180,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 10,
   },
   cardTop: { display: "flex", flexDirection: "column", gap: 6 },
+
   section: {
     border: "1px solid #e5e5e5",
     borderRadius: 10,
@@ -166,7 +189,9 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: 10,
   },
+
   label: { fontSize: 12, opacity: 0.8 },
+
   input: {
     width: "100%",
     padding: "10px 12px",
@@ -174,6 +199,7 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid #ccc",
     fontSize: 16,
   },
+
   primaryBtn: {
     width: "100%",
     padding: "10px 12px",
@@ -182,7 +208,13 @@ const styles: Record<string, React.CSSProperties> = {
     background: "#000",
     color: "#fff",
     fontSize: 16,
+    cursor: "pointer",
   },
+  primaryBtnDisabled: {
+    opacity: 0.45,
+    cursor: "not-allowed",
+  },
+
   secondaryBtn: {
     width: "100%",
     padding: "10px 12px",
@@ -190,6 +222,14 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid #ccc",
     background: "#fff",
     fontSize: 16,
+    cursor: "pointer",
   },
-  message: { margin: 0, padding: 10, borderRadius: 8, background: "#f5f5f5" },
+
+  message: {
+    margin: 0,
+    padding: 10,
+    borderRadius: 8,
+    background: "#f5f5f5",
+    textAlign: "center",
+  },
 };
