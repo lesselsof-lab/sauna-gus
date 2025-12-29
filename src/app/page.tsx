@@ -4,63 +4,89 @@ import { useEffect, useState } from "react";
 import { collection, getDocs, Timestamp } from "firebase/firestore";
 import { db } from "../lib/firebase";
 
+type EventDoc = {
+  title?: string;
+  isOpen?: boolean;
+  startAt?: Timestamp;
+  maxApproved?: number;
+  approvedCount?: number;
+};
+
 type Event = {
   id: string;
   title: string;
   isOpen: boolean;
-  startAt: Timestamp;
+  startAt?: Timestamp;
 };
 
 export default function HomePage() {
-  const [openNow, setOpenNow] = useState<Event[]>([]);
-  const [upcoming, setUpcoming] = useState<Event[]>([]);
+  const [events, setEvents] = useState<Event[]>([]);
+  const [rawCount, setRawCount] = useState<number>(0);
+  const [error, setError] = useState<string>("");
 
   useEffect(() => {
     const load = async () => {
-      const snap = await getDocs(collection(db, "events"));
-      const now = new Date();
+      try {
+        setError("");
 
-      const parsed = snap.docs.map(doc => {
-        const d: any = doc.data();
-        return {
-          id: doc.id,
-          title: d.title ?? "Uden titel",
-          isOpen: Boolean(d.isOpen),
-          startAt: d.startAt
-        };
-      });
+        const snap = await getDocs(collection(db, "events"));
+        setRawCount(snap.size);
 
-      setOpenNow(
-        parsed.filter(e =>
-          e.isOpen && e.startAt.toDate() <= now
-        )
-      );
+        const parsed: Event[] = snap.docs.map((doc) => {
+          const d = doc.data() as EventDoc;
 
-      setUpcoming(
-        parsed.filter(e =>
-          e.isOpen && e.startAt.toDate() > now
-        )
-      );
+          return {
+            id: doc.id,
+            title: d.title ?? "Uden titel",
+            isOpen: Boolean(d.isOpen),
+            startAt: d.startAt,
+          };
+        });
+
+        // Vis ALLE åbne events (uanset om de er i fremtiden)
+        setEvents(parsed.filter((e) => e.isOpen));
+      } catch (e: any) {
+        setError(e?.message ?? "Ukendt fejl");
+        setRawCount(0);
+        setEvents([]);
+      }
     };
 
     load();
   }, []);
 
   return (
-    <main>
+    <main style={{ maxWidth: 640, margin: "40px auto", fontFamily: "system-ui" }}>
       <h1>Saunagus – tilmelding</h1>
 
-      <h2>Åbne lige nu</h2>
-      {openNow.length === 0 && <p>Ingen åbne events lige nu.</p>}
-      {openNow.map(e => (
-        <div key={e.id}>{e.title}</div>
-      ))}
+      <p style={{ opacity: 0.7 }}>
+        Debug: hentede {rawCount} events, viser {events.length} åbne.
+      </p>
 
-      <h2>Kommende åbne events</h2>
-      {upcoming.length === 0 && <p>Ingen kommende åbne events.</p>}
-      {upcoming.map(e => (
-        <div key={e.id}>{e.title}</div>
-      ))}
+      {error && (
+        <p style={{ color: "crimson" }}>
+          Firestore-fejl: {error}
+        </p>
+      )}
+
+      <h2>Åbne events</h2>
+      {events.length === 0 ? (
+        <p>Ingen åbne events lige nu.</p>
+      ) : (
+        <ul>
+          {events.map((e) => (
+            <li key={e.id}>
+              <strong>{e.title}</strong>
+              {e.startAt ? (
+                <span style={{ opacity: 0.7 }}>
+                  {" "}
+                  – {e.startAt.toDate().toLocaleString("da-DK")}
+                </span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
     </main>
   );
 }
