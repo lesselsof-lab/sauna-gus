@@ -14,6 +14,7 @@ import {
   updateDoc,
   doc,
   serverTimestamp,
+  runTransaction,
 } from "firebase/firestore";
 
 import { auth, db } from "../../lib/firebase";
@@ -120,14 +121,6 @@ export default function AdminPage() {
 
       setRegistrations(data);
     } catch (e: any) {
-      setDebugInfo(
-        `Firebase bruger: ${
-          auth.currentUser?.email ?? "ingen e-mail"
-        } | UID: ${
-          auth.currentUser?.uid ?? "ingen UID"
-        }`
-      );
-
       setErr(
         e?.message ?? "Kunne ikke hente tilmeldinger."
       );
@@ -169,31 +162,129 @@ export default function AdminPage() {
     }
   };
 
-  const changeStatus = async (
-    registration: Registration,
-    status: "approved" | "rejected"
+  const approveRegistration = async (
+    registration: Registration
+  ) => {
+    setMsg("");
+    setErr("");
+
+    try {
+      await runTransaction(db, async (transaction) => {
+        const registrationRef = doc(
+          db,
+          "registrations",
+          registration.id
+        );
+
+        const eventRef = doc(
+          db,
+          "events",
+          registration.eventId
+        );
+
+        const registrationSnap =
+          await transaction.get(registrationRef);
+
+        const eventSnap =
+          await transaction.get(eventRef);
+
+        if (!registrationSnap.exists()) {
+          throw new Error(
+            "Tilmeldingen findes ikke længere."
+          );
+        }
+
+        if (!eventSnap.exists()) {
+          throw new Error(
+            "Eventet findes ikke længere."
+          );
+        }
+
+        const registrationData =
+          registrationSnap.data();
+
+        const eventData = eventSnap.data();
+
+        if (
+          registrationData.status ===
+          "approved"
+        ) {
+          return;
+        }
+
+        const approvedCount =
+          Number(
+            eventData.approvedCount ?? 0
+          );
+
+        const maxApproved =
+          Number(
+            eventData.maxApproved ?? 0
+          );
+
+        if (
+          maxApproved > 0 &&
+          approvedCount >= maxApproved
+        ) {
+          throw new Error(
+            "Eventet er allerede fuldt booket."
+          );
+        }
+
+        transaction.update(
+          registrationRef,
+          {
+            status: "approved",
+          }
+        );
+
+        transaction.update(
+          eventRef,
+          {
+            approvedCount:
+              approvedCount + 1,
+          }
+        );
+      });
+
+      await loadRegistrations();
+
+      setMsg(
+        "Tilmelding godkendt ✓ Pladstallet er opdateret."
+      );
+    } catch (e: any) {
+      setErr(
+        e?.message ??
+          "Tilmeldingen kunne ikke godkendes."
+      );
+    }
+  };
+
+  const rejectRegistration = async (
+    registration: Registration
   ) => {
     setMsg("");
     setErr("");
 
     try {
       await updateDoc(
-        doc(db, "registrations", registration.id),
+        doc(
+          db,
+          "registrations",
+          registration.id
+        ),
         {
-          status,
+          status: "rejected",
         }
       );
 
       await loadRegistrations();
 
-      setMsg(
-        status === "approved"
-          ? "Tilmelding godkendt ✓"
-          : "Tilmelding afvist."
-      );
+      setMsg("Tilmelding afvist.");
     } catch (e: any) {
       setErr(
-        e?.message ?? "Status kunne ikke ændres."
+        e?.message ??
+          "Tilmeldingen kunne ikke afvises."
       );
     }
   };
@@ -250,7 +341,9 @@ export default function AdminPage() {
             type="email"
             placeholder="Admin e-mail"
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            onChange={(e) =>
+              setEmail(e.target.value)
+            }
             style={{
               width: "100%",
               padding: 12,
@@ -263,7 +356,9 @@ export default function AdminPage() {
             type="password"
             placeholder="Adgangskode"
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            onChange={(e) =>
+              setPassword(e.target.value)
+            }
             style={{
               width: "100%",
               padding: 12,
@@ -322,7 +417,9 @@ export default function AdminPage() {
               type="text"
               placeholder="Eventtitel"
               value={title}
-              onChange={(e) => setTitle(e.target.value)}
+              onChange={(e) =>
+                setTitle(e.target.value)
+              }
               style={{
                 width: "100%",
                 padding: 12,
@@ -334,7 +431,9 @@ export default function AdminPage() {
             <input
               type="datetime-local"
               value={startAt}
-              onChange={(e) => setStartAt(e.target.value)}
+              onChange={(e) =>
+                setStartAt(e.target.value)
+              }
               style={{
                 width: "100%",
                 padding: 12,
@@ -350,7 +449,9 @@ export default function AdminPage() {
               min="1"
               value={maxApproved}
               onChange={(e) =>
-                setMaxApproved(Number(e.target.value))
+                setMaxApproved(
+                  Number(e.target.value)
+                )
               }
               style={{
                 width: "100%",
@@ -364,7 +465,9 @@ export default function AdminPage() {
               <input
                 type="checkbox"
                 checked={isOpen}
-                onChange={(e) => setIsOpen(e.target.checked)}
+                onChange={(e) =>
+                  setIsOpen(e.target.checked)
+                }
               />{" "}
               Åben for tilmelding
             </label>
@@ -427,19 +530,25 @@ export default function AdminPage() {
                     {registration.status}
                   </div>
 
-                  {registration.status === "pending" && (
-                    <div style={{ marginTop: 15 }}>
+                  {registration.status ===
+                    "pending" && (
+                    <div
+                      style={{
+                        marginTop: 15,
+                      }}
+                    >
                       <button
                         onClick={() =>
-                          changeStatus(
-                            registration,
-                            "approved"
+                          approveRegistration(
+                            registration
                           )
                         }
                         style={{
-                          padding: "10px 15px",
+                          padding:
+                            "10px 15px",
                           marginRight: 10,
-                          cursor: "pointer",
+                          cursor:
+                            "pointer",
                         }}
                       >
                         Godkend
@@ -447,14 +556,15 @@ export default function AdminPage() {
 
                       <button
                         onClick={() =>
-                          changeStatus(
-                            registration,
-                            "rejected"
+                          rejectRegistration(
+                            registration
                           )
                         }
                         style={{
-                          padding: "10px 15px",
-                          cursor: "pointer",
+                          padding:
+                            "10px 15px",
+                          cursor:
+                            "pointer",
                         }}
                       >
                         Afvis
