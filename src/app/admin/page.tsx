@@ -2,7 +2,11 @@
 
 import { useEffect, useState } from "react";
 import styles from "../page.module.css";
-import { signInWithEmailAndPassword, signOut } from "firebase/auth";
+import {
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  signOut,
+} from "firebase/auth";
 import {
   collection,
   addDoc,
