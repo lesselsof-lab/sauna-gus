@@ -30,7 +30,7 @@ export default function HomePage() {
   const [events, setEvents] = useState<Event[]>([]);
   const [selectedEvent, setSelectedEvent] = useState("");
   const [username, setUsername] = useState("");
-  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -80,8 +80,8 @@ export default function HomePage() {
       return;
     }
 
-    if (!email.trim()) {
-      setError("Indtast din e-mail.");
+    if (!phone.trim()) {
+      setError("Indtast dit telefonnummer.");
       return;
     }
 
@@ -97,7 +97,7 @@ export default function HomePage() {
         eventId: event.id,
         eventTitle: event.title,
         username: username.trim(),
-        email: email.trim(),
+        phone: phone.trim(),
         status: "pending",
         createdAt: new Date(),
       });
@@ -107,7 +107,7 @@ export default function HomePage() {
       );
 
       setUsername("");
-      setEmail("");
+      setPhone("");
     } catch (e: any) {
       setError(e?.message ?? "Tilmeldingen kunne ikke sendes.");
     }
@@ -199,10 +199,10 @@ export default function HomePage() {
           />
 
           <input
-            type="email"
-            placeholder="E-mail"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            type="tel"
+            placeholder="Telefonnummer"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
             style={{
               width: "100%",
               padding: 10,
