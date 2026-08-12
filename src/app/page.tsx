@@ -17,6 +17,8 @@ type Event = {
   title: string;
   isOpen: boolean;
   startAt?: Timestamp;
+  maxApproved?: number;
+  approvedCount?: number;
 };
 
 export default function HomePage() {
@@ -40,10 +42,11 @@ export default function HomePage() {
             title: d.title ?? "Uden titel",
             isOpen: Boolean(d.isOpen),
             startAt: d.startAt,
+            maxApproved: d.maxApproved,
+            approvedCount: d.approvedCount ?? 0,
           };
         });
 
-        // Vis ALLE åbne events (uanset om de er i fremtiden)
         setEvents(parsed.filter((e) => e.isOpen));
       } catch (e: any) {
         setError(e?.message ?? "Ukendt fejl");
@@ -56,12 +59,15 @@ export default function HomePage() {
   }, []);
 
   return (
-    <main style={{ maxWidth: 640, margin: "40px auto", fontFamily: "system-ui" }}>
+    <main
+      style={{
+        maxWidth: 640,
+        margin: "40px auto",
+        padding: "0 20px",
+        fontFamily: "system-ui",
+      }}
+    >
       <h1>Saunagus – tilmelding</h1>
-
-      <p style={{ opacity: 0.7 }}>
-        Debug: hentede {rawCount} events, viser {events.length} åbne.
-      </p>
 
       {error && (
         <p style={{ color: "crimson" }}>
@@ -70,19 +76,24 @@ export default function HomePage() {
       )}
 
       <h2>Åbne events</h2>
+
       {events.length === 0 ? (
         <p>Ingen åbne events lige nu.</p>
       ) : (
         <ul>
           {events.map((e) => (
-            <li key={e.id}>
+            <li key={e.id} style={{ marginBottom: 20 }}>
               <strong>{e.title}</strong>
-              {e.startAt ? (
-                <span style={{ opacity: 0.7 }}>
-                  {" "}
-                  – {e.startAt.toDate().toLocaleString("da-DK")}
-                </span>
-              ) : null}
+
+              {e.startAt && (
+                <div style={{ opacity: 0.7 }}>
+                  {e.startAt.toDate().toLocaleString("da-DK")}
+                </div>
+              )}
+
+              <div>
+                Pladser: {e.approvedCount ?? 0} / {e.maxApproved ?? 0}
+              </div>
             </li>
           ))}
         </ul>
