@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { collection, getDocs, Timestamp } from "firebase/firestore";
+import {
+  addDoc,
+  collection,
+  getDocs,
+  Timestamp,
+} from "firebase/firestore";
 import { db } from "../lib/firebase";
 
 type EventDoc = {
@@ -23,16 +28,16 @@ type Event = {
 
 export default function HomePage() {
   const [events, setEvents] = useState<Event[]>([]);
-  const [rawCount, setRawCount] = useState<number>(0);
-  const [error, setError] = useState<string>("");
+  const [selectedEvent, setSelectedEvent] = useState("");
+  const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
 
   useEffect(() => {
     const load = async () => {
       try {
-        setError("");
-
         const snap = await getDocs(collection(db, "events"));
-        setRawCount(snap.size);
 
         const parsed: Event[] = snap.docs.map((doc) => {
           const d = doc.data() as EventDoc;
@@ -47,21 +52,71 @@ export default function HomePage() {
           };
         });
 
-        setEvents(parsed.filter((e) => e.isOpen));
+        const openEvents = parsed.filter((e) => e.isOpen);
+        setEvents(openEvents);
+
+        if (openEvents.length > 0) {
+          setSelectedEvent(openEvents[0].id);
+        }
       } catch (e: any) {
-        setError(e?.message ?? "Ukendt fejl");
-        setRawCount(0);
-        setEvents([]);
+        setError(e?.message ?? "Kunne ikke hente events");
       }
     };
 
     load();
   }, []);
 
+  const submitRegistration = async () => {
+    setMessage("");
+    setError("");
+
+    if (!selectedEvent) {
+      setError("Vælg et event.");
+      return;
+    }
+
+    if (!username.trim()) {
+      setError("Indtast dit brugernavn.");
+      return;
+    }
+
+    if (!email.trim()) {
+      setError("Indtast din e-mail.");
+      return;
+    }
+
+    const event = events.find((e) => e.id === selectedEvent);
+
+    if (!event) {
+      setError("Det valgte event blev ikke fundet.");
+      return;
+    }
+
+    try {
+      await addDoc(collection(db, "registrations"), {
+        eventId: event.id,
+        eventTitle: event.title,
+        username: username.trim(),
+        email: email.trim(),
+        status: "pending",
+        createdAt: new Date(),
+      });
+
+      setMessage(
+        "Tak! Din tilmelding er modtaget og afventer godkendelse."
+      );
+
+      setUsername("");
+      setEmail("");
+    } catch (e: any) {
+      setError(e?.message ?? "Tilmeldingen kunne ikke sendes.");
+    }
+  };
+
   return (
     <main
       style={{
-        maxWidth: 640,
+        maxWidth: 700,
         margin: "40px auto",
         padding: "0 20px",
         fontFamily: "system-ui",
@@ -71,7 +126,13 @@ export default function HomePage() {
 
       {error && (
         <p style={{ color: "crimson" }}>
-          Firestore-fejl: {error}
+          {error}
+        </p>
+      )}
+
+      {message && (
+        <p style={{ color: "green", fontWeight: "bold" }}>
+          {message}
         </p>
       )}
 
@@ -80,23 +141,86 @@ export default function HomePage() {
       {events.length === 0 ? (
         <p>Ingen åbne events lige nu.</p>
       ) : (
-        <ul>
-          {events.map((e) => (
-            <li key={e.id} style={{ marginBottom: 20 }}>
-              <strong>{e.title}</strong>
+        <>
+          {events.map((event) => (
+            <div
+              key={event.id}
+              style={{
+                border: "1px solid #ddd",
+                padding: 15,
+                marginBottom: 10,
+                borderRadius: 8,
+              }}
+            >
+              <strong>{event.title}</strong>
 
-              {e.startAt && (
-                <div style={{ opacity: 0.7 }}>
-                  {e.startAt.toDate().toLocaleString("da-DK")}
+              {event.startAt && (
+                <div>
+                  {event.startAt.toDate().toLocaleString("da-DK")}
                 </div>
               )}
 
               <div>
-                Pladser: {e.approvedCount ?? 0} / {e.maxApproved ?? 0}
+                Pladser: {event.approvedCount ?? 0} /{" "}
+                {event.maxApproved ?? 0}
               </div>
-            </li>
+            </div>
           ))}
-        </ul>
+
+          <h2>Tilmeld dig</h2>
+
+          <select
+            value={selectedEvent}
+            onChange={(e) => setSelectedEvent(e.target.value)}
+            style={{
+              width: "100%",
+              padding: 10,
+              marginBottom: 10,
+            }}
+          >
+            {events.map((event) => (
+              <option key={event.id} value={event.id}>
+                {event.title}
+              </option>
+            ))}
+          </select>
+
+          <input
+            type="text"
+            placeholder="Brugernavn"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            style={{
+              width: "100%",
+              padding: 10,
+              marginBottom: 10,
+              boxSizing: "border-box",
+            }}
+          />
+
+          <input
+            type="email"
+            placeholder="E-mail"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            style={{
+              width: "100%",
+              padding: 10,
+              marginBottom: 10,
+              boxSizing: "border-box",
+            }}
+          />
+
+          <button
+            onClick={submitRegistration}
+            style={{
+              padding: "10px 20px",
+              cursor: "pointer",
+            }}
+          >
+            Send tilmelding
+          </button>
+        </>
       )}
     </main>
   );
