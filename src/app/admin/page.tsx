@@ -1,20 +1,21 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import styles from "../page.module.css";
 import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
   signOut,
 } from "firebase/auth";
+
 import {
-  collection,
   addDoc,
+  collection,
   getDocs,
   updateDoc,
   doc,
   serverTimestamp,
 } from "firebase/firestore";
+
 import { auth, db } from "../../lib/firebase";
 
 type Registration = {
@@ -30,8 +31,10 @@ export default function AdminPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
-  const [title, setTitle] = useState("Saunagus - Nyt event");
-  const [maxApproved, setMaxApproved] = useState(5);
+  const [loggedIn, setLoggedIn] = useState(false);
+
+  const [title, setTitle] = useState("Par Saunagus - Nyt event");
+  const [maxApproved, setMaxApproved] = useState(8);
   const [isOpen, setIsOpen] = useState(true);
   const [startAt, setStartAt] = useState("");
 
@@ -40,16 +43,34 @@ export default function AdminPage() {
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
 
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setLoggedIn(true);
+        loadRegistrations();
+      } else {
+        setLoggedIn(false);
+        setRegistrations([]);
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
   const login = async () => {
     setMsg("");
     setErr("");
 
     try {
-      await signInWithEmailAndPassword(auth, email.trim(), password);
+      await signInWithEmailAndPassword(
+        auth,
+        email.trim(),
+        password
+      );
+
       setMsg("Logget ind ✓");
-      await loadRegistrations();
     } catch (e: any) {
-      setErr(e?.message ?? String(e));
+      setErr(e?.message ?? "Login mislykkedes.");
     }
   };
 
@@ -59,12 +80,42 @@ export default function AdminPage() {
     setRegistrations([]);
   };
 
+  const loadRegistrations = async () => {
+    try {
+      setErr("");
+
+      const snap = await getDocs(
+        collection(db, "registrations")
+      );
+
+      const data: Registration[] = snap.docs.map((d) => {
+        const x = d.data();
+
+        return {
+          id: d.id,
+          eventId: x.eventId ?? "",
+          eventTitle: x.eventTitle ?? "",
+          username: x.username ?? "",
+          phone: x.phone ?? "",
+          status: x.status ?? "pending",
+        };
+      });
+
+      setRegistrations(data);
+    } catch (e: any) {
+      setErr(
+        e?.message ??
+          "Kunne ikke hente tilmeldinger."
+      );
+    }
+  };
+
   const createEvent = async () => {
     setMsg("");
     setErr("");
 
     if (!title.trim()) {
-      setErr("Indtast en titel.");
+      setErr("Indtast en eventtitel.");
       return;
     }
 
@@ -84,31 +135,14 @@ export default function AdminPage() {
       });
 
       setMsg("Event oprettet ✓");
+
+      setTitle("Par Saunagus - Nyt event");
+      setStartAt("");
     } catch (e: any) {
-      setErr(e?.message ?? String(e));
-    }
-  };
-
-  const loadRegistrations = async () => {
-    try {
-      const snap = await getDocs(collection(db, "registrations"));
-
-      const data: Registration[] = snap.docs.map((d) => {
-        const x = d.data();
-
-        return {
-          id: d.id,
-          eventId: x.eventId ?? "",
-          eventTitle: x.eventTitle ?? "",
-          username: x.username ?? "",
-          phone: x.phone ?? "",
-          status: x.status ?? "pending",
-        };
-      });
-
-      setRegistrations(data);
-    } catch (e: any) {
-      setErr(e?.message ?? String(e));
+      setErr(
+        e?.message ??
+          "Eventet kunne ikke oprettes."
+      );
     }
   };
 
@@ -120,228 +154,316 @@ export default function AdminPage() {
     setErr("");
 
     try {
-      await updateDoc(doc(db, "registrations", registration.id), {
-        status,
-      });
+      await updateDoc(
+        doc(db, "registrations", registration.id),
+        {
+          status,
+        }
+      );
 
       await loadRegistrations();
 
-      setMsg(
-        status === "approved"
-          ? "Tilmelding godkendt ✓"
-          : "Tilmelding afvist."
-      );
+      if (status === "approved") {
+        setMsg("Tilmelding godkendt ✓");
+      } else {
+        setMsg("Tilmelding afvist.");
+      }
     } catch (e: any) {
-      setErr(e?.message ?? String(e));
+      setErr(
+        e?.message ??
+          "Status kunne ikke ændres."
+      );
     }
   };
-
-  useEffect(() => {
-    loadRegistrations();
-  }, []);
 
   return (
     <main
       style={{
         maxWidth: 900,
-        margin: "40px auto",
-        padding: "0 20px",
+        margin: "0 auto",
+        padding: "30px 20px",
         fontFamily: "system-ui",
       }}
     >
-      <h1>Saunagus – Admin</h1>
+      <h1>PAR SAUNAGUS</h1>
 
       {msg && (
-        <p style={{ color: "green", fontWeight: "bold" }}>
+        <div
+          style={{
+            padding: 12,
+            marginBottom: 15,
+            background: "#e8f5e9",
+            borderRadius: 8,
+          }}
+        >
           {msg}
-        </p>
+        </div>
       )}
 
       {err && (
-        <p style={{ color: "crimson" }}>
+        <div
+          style={{
+            padding: 12,
+            marginBottom: 15,
+            background: "#ffebee",
+            color: "#b71c1c",
+            borderRadius: 8,
+          }}
+        >
           {err}
-        </p>
+        </div>
       )}
 
-      <hr />
+      {!loggedIn ? (
+        <section
+          style={{
+            border: "1px solid #ddd",
+            borderRadius: 10,
+            padding: 20,
+          }}
+        >
+          <h2>Admin login</h2>
 
-      <h2>Admin login</h2>
-
-      <input
-        type="email"
-        placeholder="Admin e-mail"
-        value={email}
-        onChange={(e) => setEmail(e.target.value)}
-        style={{
-          width: "100%",
-          padding: 10,
-          marginBottom: 10,
-          boxSizing: "border-box",
-        }}
-      />
-
-      <input
-        type="password"
-        placeholder="Adgangskode"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        style={{
-          width: "100%",
-          padding: 10,
-          marginBottom: 10,
-          boxSizing: "border-box",
-        }}
-      />
-
-      <button
-        onClick={login}
-        style={{
-          padding: "10px 20px",
-          marginRight: 10,
-          cursor: "pointer",
-        }}
-      >
-        Log ind
-      </button>
-
-      <button
-        onClick={logout}
-        style={{
-          padding: "10px 20px",
-          cursor: "pointer",
-        }}
-      >
-        Log ud
-      </button>
-
-      <hr />
-
-      <h2>Opret event</h2>
-
-      <input
-        type="text"
-        placeholder="Event titel"
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        style={{
-          width: "100%",
-          padding: 10,
-          marginBottom: 10,
-          boxSizing: "border-box",
-        }}
-      />
-
-      <input
-        type="datetime-local"
-        value={startAt}
-        onChange={(e) => setStartAt(e.target.value)}
-        style={{
-          width: "100%",
-          padding: 10,
-          marginBottom: 10,
-          boxSizing: "border-box",
-        }}
-      />
-
-      <input
-        type="number"
-        min="1"
-        value={maxApproved}
-        onChange={(e) => setMaxApproved(Number(e.target.value))}
-        style={{
-          width: "100%",
-          padding: 10,
-          marginBottom: 10,
-          boxSizing: "border-box",
-        }}
-      />
-
-      <label>
-        <input
-          type="checkbox"
-          checked={isOpen}
-          onChange={(e) => setIsOpen(e.target.checked)}
-        />{" "}
-        Åbent for tilmeldinger
-      </label>
-
-      <br />
-      <br />
-
-      <button
-        onClick={createEvent}
-        style={{
-          padding: "10px 20px",
-          cursor: "pointer",
-        }}
-      >
-        Opret event
-      </button>
-
-      <hr />
-
-      <h2>Tilmeldinger</h2>
-
-      <button
-        onClick={loadRegistrations}
-        style={{
-          padding: "8px 15px",
-          marginBottom: 15,
-          cursor: "pointer",
-        }}
-      >
-        Opdater
-      </button>
-
-      {registrations.length === 0 ? (
-        <p>Ingen tilmeldinger.</p>
-      ) : (
-        registrations.map((registration) => (
-          <div
-            key={registration.id}
+          <input
+            type="email"
+            placeholder="Admin e-mail"
+            value={email}
+            onChange={(e) =>
+              setEmail(e.target.value)
+            }
             style={{
-              border: "1px solid #ddd",
-              borderRadius: 8,
-              padding: 15,
+              width: "100%",
+              padding: 12,
               marginBottom: 10,
+              boxSizing: "border-box",
+            }}
+          />
+
+          <input
+            type="password"
+            placeholder="Adgangskode"
+            value={password}
+            onChange={(e) =>
+              setPassword(e.target.value)
+            }
+            style={{
+              width: "100%",
+              padding: 12,
+              marginBottom: 10,
+              boxSizing: "border-box",
+            }}
+          />
+
+          <button
+            onClick={login}
+            style={{
+              padding: "12px 20px",
+              cursor: "pointer",
             }}
           >
-            <strong>{registration.eventTitle}</strong>
+            Log ind
+          </button>
+        </section>
+      ) : (
+        <>
+          <button
+            onClick={logout}
+            style={{
+              padding: "10px 18px",
+              marginBottom: 25,
+              cursor: "pointer",
+            }}
+          >
+            Log ud
+          </button>
 
-            <div>Brugernavn: {registration.username}</div>
-            <div>Telefon: {registration.phone}</div>
-            <div>Status: {registration.status}</div>
+          <section
+            style={{
+              border: "1px solid #ddd",
+              borderRadius: 10,
+              padding: 20,
+              marginBottom: 30,
+            }}
+          >
+            <h2>Opret event</h2>
 
-            {registration.status === "pending" && (
-              <div style={{ marginTop: 10 }}>
-                <button
-                  onClick={() =>
-                    changeStatus(registration, "approved")
-                  }
-                  style={{
-                    padding: "8px 15px",
-                    marginRight: 10,
-                    cursor: "pointer",
-                  }}
-                >
-                  Godkend
-                </button>
+            <input
+              type="text"
+              placeholder="Eventtitel"
+              value={title}
+              onChange={(e) =>
+                setTitle(e.target.value)
+              }
+              style={{
+                width: "100%",
+                padding: 12,
+                marginBottom: 10,
+                boxSizing: "border-box",
+              }}
+            />
 
-                <button
-                  onClick={() =>
-                    changeStatus(registration, "rejected")
-                  }
-                  style={{
-                    padding: "8px 15px",
-                    cursor: "pointer",
-                  }}
-                >
-                  Afvis
-                </button>
-              </div>
+            <input
+              type="datetime-local"
+              value={startAt}
+              onChange={(e) =>
+                setStartAt(e.target.value)
+              }
+              style={{
+                width: "100%",
+                padding: 12,
+                marginBottom: 10,
+                boxSizing: "border-box",
+              }}
+            />
+
+            <label>
+              Antal pladser:
+            </label>
+
+            <input
+              type="number"
+              min="1"
+              value={maxApproved}
+              onChange={(e) =>
+                setMaxApproved(
+                  Number(e.target.value)
+                )
+              }
+              style={{
+                width: "100%",
+                padding: 12,
+                marginBottom: 10,
+                boxSizing: "border-box",
+              }}
+            />
+
+            <label>
+              <input
+                type="checkbox"
+                checked={isOpen}
+                onChange={(e) =>
+                  setIsOpen(e.target.checked)
+                }
+              />{" "}
+              Åben for tilmelding
+            </label>
+
+            <br />
+            <br />
+
+            <button
+              onClick={createEvent}
+              style={{
+                padding: "12px 20px",
+                cursor: "pointer",
+              }}
+            >
+              Opret event
+            </button>
+          </section>
+
+          <section>
+            <h2>Tilmeldinger</h2>
+
+            <button
+              onClick={loadRegistrations}
+              style={{
+                padding: "10px 18px",
+                marginBottom: 15,
+                cursor: "pointer",
+              }}
+            >
+              Opdater
+            </button>
+
+            {registrations.length === 0 ? (
+              <p>
+                Ingen tilmeldinger.
+              </p>
+            ) : (
+              registrations.map(
+                (registration) => (
+                  <div
+                    key={registration.id}
+                    style={{
+                      border: "1px solid #ddd",
+                      borderRadius: 10,
+                      padding: 15,
+                      marginBottom: 10,
+                    }}
+                  >
+                    <h3
+                      style={{
+                        marginTop: 0,
+                      }}
+                    >
+                      {registration.username}
+                    </h3>
+
+                    <div>
+                      <strong>Event:</strong>{" "}
+                      {registration.eventTitle}
+                    </div>
+
+                    <div>
+                      <strong>Telefon:</strong>{" "}
+                      {registration.phone}
+                    </div>
+
+                    <div>
+                      <strong>Status:</strong>{" "}
+                      {registration.status}
+                    </div>
+
+                    {registration.status ===
+                      "pending" && (
+                      <div
+                        style={{
+                          marginTop: 15,
+                        }}
+                      >
+                        <button
+                          onClick={() =>
+                            changeStatus(
+                              registration,
+                              "approved"
+                            )
+                          }
+                          style={{
+                            padding:
+                              "10px 15px",
+                            marginRight: 10,
+                            cursor:
+                              "pointer",
+                          }}
+                        >
+                          Godkend
+                        </button>
+
+                        <button
+                          onClick={() =>
+                            changeStatus(
+                              registration,
+                              "rejected"
+                            )
+                          }
+                          style={{
+                            padding:
+                              "10px 15px",
+                            cursor:
+                              "pointer",
+                          }}
+                        >
+                          Afvis
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )
+              )
             )}
-          </div>
-        ))
+          </section>
+        </>
       )}
     </main>
   );
