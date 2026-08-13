@@ -18,6 +18,7 @@ import {
   serverTimestamp,
   Timestamp,
   updateDoc,
+  writeBatch,
 } from "firebase/firestore";
 
 import { auth, db } from "../../lib/firebase";
@@ -267,7 +268,7 @@ export default function AdminPage() {
   ) {
     const confirmed =
       window.confirm(
-        `Er du sikker på, at du vil slette "${event.title}"?\n\nEventet slettes permanent.`
+        `Er du sikker på, at du vil slette "${event.title}"?\n\nEventet OG alle tilmeldinger til eventet slettes permanent.`
       );
 
     if (!confirmed) {
@@ -278,14 +279,44 @@ export default function AdminPage() {
       setMsg("");
       setErr("");
 
-      await deleteDoc(
+      const registrationSnap =
+        await getDocs(
+          collection(db, "registrations")
+        );
+
+      const batch = writeBatch(db);
+
+      let deletedRegistrations = 0;
+
+      registrationSnap.docs.forEach(
+        (registrationDoc) => {
+          const data =
+            registrationDoc.data();
+
+          if (
+            data.eventId ===
+            event.id
+          ) {
+            batch.delete(
+              registrationDoc.ref
+            );
+
+            deletedRegistrations++;
+          }
+        }
+      );
+
+      batch.delete(
         doc(db, "events", event.id)
       );
 
+      await batch.commit();
+
       await loadEvents();
+      await loadRegistrations();
 
       setMsg(
-        `"${event.title}" er slettet ✓`
+        `"${event.title}" er slettet sammen med ${deletedRegistrations} tilmelding(er) ✓`
       );
     } catch (e: any) {
       setErr(
