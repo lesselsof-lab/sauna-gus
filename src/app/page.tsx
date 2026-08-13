@@ -4,20 +4,20 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   collection,
-  getDocs,
-  runTransaction,
   doc,
-  Timestamp,
+  getDocs,
   query,
+  runTransaction,
+  Timestamp,
   where,
 } from "firebase/firestore";
 
 import {
+  ConfirmationResult,
   onAuthStateChanged,
   RecaptchaVerifier,
   signInWithPhoneNumber,
   signOut,
-  ConfirmationResult,
 } from "firebase/auth";
 
 import { auth, db } from "../lib/firebase";
@@ -48,7 +48,7 @@ type Registration = {
   status: "pending" | "approved" | "rejected";
 };
 
-function normalizePhone(phone: string) {
+function normalizePhone(phone: string): string {
   const digits = phone.replace(/\D/g, "");
 
   if (digits.startsWith("45") && digits.length === 10) {
@@ -58,7 +58,7 @@ function normalizePhone(phone: string) {
   return digits;
 }
 
-function toFirebasePhone(phone: string) {
+function toFirebasePhone(phone: string): string {
   const localPhone = normalizePhone(phone);
 
   if (localPhone.length !== 8) {
@@ -66,6 +66,17 @@ function toFirebasePhone(phone: string) {
   }
 
   return `+45${localPhone}`;
+}
+
+function formatDate(timestamp?: Timestamp): string {
+  if (!timestamp) {
+    return "";
+  }
+
+  return timestamp.toDate().toLocaleString("da-DK", {
+    dateStyle: "short",
+    timeStyle: "short",
+  });
 }
 
 export default function HomePage() {
@@ -78,15 +89,15 @@ export default function HomePage() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
-  const [sending, setSending] = useState(false);
-
-  const [showLogin, setShowLogin] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
 
+  const [showLogin, setShowLogin] = useState(false);
   const [loginPhone, setLoginPhone] = useState("");
   const [verificationCode, setVerificationCode] = useState("");
   const [codeSent, setCodeSent] = useState(false);
+
   const [loggingIn, setLoggingIn] = useState(false);
+  const [sending, setSending] = useState(false);
 
   const [myRegistrations, setMyRegistrations] = useState<
     Registration[]
@@ -98,60 +109,80 @@ export default function HomePage() {
   const recaptchaVerifier =
     useRef<RecaptchaVerifier | null>(null);
 
-  const registrationsInterval =
+  const eventsTimer =
     useRef<ReturnType<typeof setInterval> | null>(null);
 
+  const registrationsTimer =
+    useRef<ReturnType<typeof setInterval> | null>(null);
+
+  /*
+   * Hent åbne events
+   */
   const loadEvents = async () => {
     try {
-      const snap = await getDocs(
+      const snapshot = await getDocs(
         collection(db, "events")
       );
 
-      const parsed: Event[] = snap.docs
+      const loadedEvents: Event[] = snapshot.docs
         .map((eventDoc) => {
-          const d = eventDoc.data() as EventDoc;
+          const data =
+            eventDoc.data() as EventDoc;
 
           return {
             id: eventDoc.id,
-            title: d.title ?? "Uden titel",
-            isOpen: Boolean(d.isOpen),
-            startAt: d.startAt,
-            maxApproved: Number(d.maxApproved ?? 0),
-            approvedCount: Number(d.approvedCount ?? 0),
+            title: data.title ?? "Uden titel",
+            isOpen: Boolean(data.isOpen),
+            startAt: data.startAt,
+            maxApproved: Number(
+              data.maxApproved ?? 0
+            ),
+            approvedCount: Number(
+              data.approvedCount ?? 0
+            ),
           };
         })
+        .filter((event) => event.isOpen)
         .sort((a, b) => {
-          const aTime = a.startAt?.toMillis() ?? 0;
-          const bTime = b.startAt?.toMillis() ?? 0;
+          const aTime =
+            a.startAt?.toMillis() ?? 0;
+
+          const bTime =
+            b.startAt?.toMillis() ?? 0;
 
           return aTime - bTime;
         });
 
-      const openEvents = parsed.filter(
-        (event) => event.isOpen
-      );
+      setEvents(loadedEvents);
 
-      setEvents(openEvents);
-
-      if (
-        openEvents.length > 0 &&
-        !openEvents.some(
-          (event) => event.id === selectedEvent
-        )
-      ) {
-        setSelectedEvent(openEvents[0].id);
-      }
-
-      if (openEvents.length === 0) {
+      if (loadedEvents.length === 0) {
         setSelectedEvent("");
+        return;
       }
+
+      setSelectedEvent((current) => {
+        const stillExists =
+          loadedEvents.some(
+            (event) => event.id === current
+          );
+
+        return stillExists
+          ? current
+          : loadedEvents[0].id;
+      });
     } catch (e: any) {
+      console.error(e);
+
       setError(
-        e?.message ?? "Kunne ikke hente events."
+        e?.message ??
+          "Kunne ikke hente events."
       );
     }
   };
 
+  /*
+   * Hent kundens egne tilmeldinger
+   */
   const loadMyRegistrations = async () => {
     const user = auth.currentUser;
 
@@ -161,37 +192,44 @@ export default function HomePage() {
     }
 
     try {
-      const firebasePhone = user.phoneNumber;
-
       const registrationsQuery = query(
         collection(db, "registrations"),
-        where("phone", "==", firebasePhone)
+        where(
+          "phone",
+          "==",
+          user.phoneNumber
+        )
       );
 
-      const snap = await getDocs(
+      const snapshot = await getDocs(
         registrationsQuery
       );
 
-      const data: Registration[] =
-        snap.docs.map((registrationDoc) => {
-          const d = registrationDoc.data();
+      const registrations: Registration[] =
+        snapshot.docs.map((registrationDoc) => {
+          const data =
+            registrationDoc.data();
 
           return {
             id: registrationDoc.id,
-            eventId: d.eventId ?? "",
+            eventId:
+              data.eventId ?? "",
             eventTitle:
-              d.eventTitle ?? "Uden titel",
-            username: d.username ?? "",
-            phone: d.phone ?? "",
+              data.eventTitle ??
+              "Uden titel",
+            username:
+              data.username ?? "",
+            phone:
+              data.phone ?? "",
             status:
-              d.status ?? "pending",
+              data.status ?? "pending",
           };
         });
 
-      setMyRegistrations(data);
+      setMyRegistrations(registrations);
     } catch (e: any) {
       console.error(
-        "Fejl ved hentning af mine tilmeldinger:",
+        "Fejl ved hentning af tilmeldinger:",
         e
       );
 
@@ -202,11 +240,17 @@ export default function HomePage() {
     }
   };
 
+  /*
+   * Login-status
+   */
   useEffect(() => {
     loadEvents();
 
-    const eventsInterval =
-      setInterval(loadEvents, 5000);
+    eventsTimer.current =
+      setInterval(
+        loadEvents,
+        5000
+      );
 
     const unsubscribe =
       onAuthStateChanged(
@@ -218,14 +262,14 @@ export default function HomePage() {
             await loadMyRegistrations();
 
             if (
-              registrationsInterval.current
+              registrationsTimer.current
             ) {
               clearInterval(
-                registrationsInterval.current
+                registrationsTimer.current
               );
             }
 
-            registrationsInterval.current =
+            registrationsTimer.current =
               setInterval(
                 loadMyRegistrations,
                 5000
@@ -235,13 +279,13 @@ export default function HomePage() {
             setMyRegistrations([]);
 
             if (
-              registrationsInterval.current
+              registrationsTimer.current
             ) {
               clearInterval(
-                registrationsInterval.current
+                registrationsTimer.current
               );
 
-              registrationsInterval.current =
+              registrationsTimer.current =
                 null;
             }
           }
@@ -249,18 +293,20 @@ export default function HomePage() {
       );
 
     return () => {
-      clearInterval(eventsInterval);
       unsubscribe();
 
+      if (eventsTimer.current) {
+        clearInterval(
+          eventsTimer.current
+        );
+      }
+
       if (
-        registrationsInterval.current
+        registrationsTimer.current
       ) {
         clearInterval(
-          registrationsInterval.current
+          registrationsTimer.current
         );
-
-        registrationsInterval.current =
-          null;
       }
 
       if (
@@ -276,17 +322,29 @@ export default function HomePage() {
     };
   }, []);
 
+  /*
+   * Åbn login
+   */
   const openLogin = () => {
     setMessage("");
     setError("");
+
+    setLoginPhone("");
+    setVerificationCode("");
+    setCodeSent(false);
+
     setShowLogin(true);
   };
 
+  /*
+   * Luk login
+   */
   const closeLogin = () => {
     setShowLogin(false);
-    setCodeSent(false);
-    setVerificationCode("");
+
     setLoginPhone("");
+    setVerificationCode("");
+    setCodeSent(false);
 
     confirmationResult.current =
       null;
@@ -303,8 +361,13 @@ export default function HomePage() {
     }
   };
 
+  /*
+   * Send SMS-login
+   */
   const sendLoginCode = async () => {
-    if (loggingIn) return;
+    if (loggingIn) {
+      return;
+    }
 
     setMessage("");
     setError("");
@@ -361,10 +424,15 @@ export default function HomePage() {
       setCodeSent(true);
 
       setMessage(
-        "SMS-koden er sendt til dit telefonnummer."
+        "SMS-koden er sendt."
       );
     } catch (e: any) {
       console.error(e);
+
+      setError(
+        e?.message ??
+          "SMS-koden kunne ikke sendes."
+      );
 
       if (
         recaptchaVerifier.current
@@ -376,18 +444,18 @@ export default function HomePage() {
         recaptchaVerifier.current =
           null;
       }
-
-      setError(
-        e?.message ??
-          "SMS-koden kunne ikke sendes."
-      );
     } finally {
       setLoggingIn(false);
     }
   };
 
+  /*
+   * Bekræft SMS-kode
+   */
   const confirmLogin = async () => {
-    if (loggingIn) return;
+    if (loggingIn) {
+      return;
+    }
 
     setMessage("");
     setError("");
@@ -401,9 +469,11 @@ export default function HomePage() {
       return;
     }
 
-    if (!verificationCode.trim()) {
+    if (
+      verificationCode.trim().length === 0
+    ) {
       setError(
-        "Indtast koden fra SMS'en."
+        "Indtast SMS-koden."
       );
       return;
     }
@@ -415,13 +485,13 @@ export default function HomePage() {
         verificationCode.trim()
       );
 
+      confirmationResult.current =
+        null;
+
       setLoggedIn(true);
       setShowLogin(false);
       setCodeSent(false);
       setVerificationCode("");
-
-      confirmationResult.current =
-        null;
 
       if (
         recaptchaVerifier.current
@@ -443,30 +513,22 @@ export default function HomePage() {
       console.error(e);
 
       setError(
-        "Koden er forkert eller udløbet. Prøv igen."
+        "SMS-koden er forkert eller udløbet."
       );
     } finally {
       setLoggingIn(false);
     }
   };
 
+  /*
+   * Log ud
+   */
   const logout = async () => {
     try {
       await signOut(auth);
 
       setLoggedIn(false);
       setMyRegistrations([]);
-
-      if (
-        registrationsInterval.current
-      ) {
-        clearInterval(
-          registrationsInterval.current
-        );
-
-        registrationsInterval.current =
-          null;
-      }
 
       setMessage(
         "Du er logget ud."
@@ -479,19 +541,22 @@ export default function HomePage() {
     }
   };
 
+  /*
+   * Opret tilmelding
+   */
   const submitRegistration =
     async () => {
-      if (sending) return;
+      if (sending) {
+        return;
+      }
 
       setMessage("");
       setError("");
-      setSending(true);
 
       if (!selectedEvent) {
         setError(
           "Vælg et event."
         );
-        setSending(false);
         return;
       }
 
@@ -499,7 +564,6 @@ export default function HomePage() {
         setError(
           "Indtast dit brugernavn."
         );
-        setSending(false);
         return;
       }
 
@@ -507,7 +571,6 @@ export default function HomePage() {
         setError(
           "Indtast dit telefonnummer."
         );
-        setSending(false);
         return;
       }
 
@@ -518,28 +581,100 @@ export default function HomePage() {
         setError(
           "Indtast et gyldigt dansk telefonnummer på 8 cifre."
         );
-        setSending(false);
         return;
       }
 
+      const event =
+        events.find(
+          (item) =>
+            item.id === selectedEvent
+        );
+
+      if (!event) {
+        setError(
+          "Det valgte event blev ikke fundet."
+        );
+        return;
+      }
+
+      setSending(true);
+
       try {
-        const eventRef =
-          doc(
-            db,
-            "events",
-            selectedEvent
+        /*
+         * Tjek dublet.
+         */
+        const existingQuery =
+          query(
+            collection(
+              db,
+              "registrations"
+            ),
+            where(
+              "phone",
+              "==",
+              firebasePhone
+            ),
+            where(
+              "eventId",
+              "==",
+              event.id
+            )
           );
 
+        const existingSnapshot =
+          await getDocs(
+            existingQuery
+          );
+
+        if (
+          !existingSnapshot.empty
+        ) {
+          setError(
+            "Du er allerede tilmeldt dette event."
+          );
+          setSending(false);
+          return;
+        }
+
+        /*
+         * Tjek plads.
+         *
+         * approvedCount ændres IKKE her.
+         * Pladsen tæller først, når admin
+         * godkender tilmeldingen.
+         */
+        if (
+          event.maxApproved > 0 &&
+          event.approvedCount >=
+            event.maxApproved
+        ) {
+          setError(
+            "Eventet er fuldt booket."
+          );
+          setSending(false);
+          return;
+        }
+
+        /*
+         * Opret tilmeldingen.
+         */
         await runTransaction(
           db,
           async (transaction) => {
-            const eventSnap =
+            const eventRef =
+              doc(
+                db,
+                "events",
+                event.id
+              );
+
+            const eventSnapshot =
               await transaction.get(
                 eventRef
               );
 
             if (
-              !eventSnap.exists()
+              !eventSnapshot.exists()
             ) {
               throw new Error(
                 "Eventet findes ikke længere."
@@ -547,13 +682,13 @@ export default function HomePage() {
             }
 
             const eventData =
-              eventSnap.data() as EventDoc;
+              eventSnapshot.data() as EventDoc;
 
             if (
               !eventData.isOpen
             ) {
               throw new Error(
-                "Eventet er ikke længere åbent for tilmelding."
+                "Eventet er ikke længere åbent."
               );
             }
 
@@ -591,11 +726,11 @@ export default function HomePage() {
               registrationRef,
               {
                 eventId:
-                  selectedEvent,
+                  event.id,
 
                 eventTitle:
                   eventData.title ??
-                  "Uden titel",
+                  event.title,
 
                 username:
                   username.trim(),
@@ -626,6 +761,8 @@ export default function HomePage() {
           await loadMyRegistrations();
         }
       } catch (e: any) {
+        console.error(e);
+
         setError(
           e?.message ??
             "Tilmeldingen kunne ikke sendes."
@@ -635,6 +772,12 @@ export default function HomePage() {
       }
     };
 
+  /*
+   * Afmeld kunde
+   *
+   * Kunden sletter KUN sin egen tilmelding.
+   * Kunden ændrer ikke events eller approvedCount.
+   */
   const cancelRegistration =
     async (
       registration: Registration
@@ -648,10 +791,10 @@ export default function HomePage() {
         return;
       }
 
-      try {
-        setMessage("");
-        setError("");
+      setMessage("");
+      setError("");
 
+      try {
         const registrationRef =
           doc(
             db,
@@ -659,21 +802,49 @@ export default function HomePage() {
             registration.id
           );
 
-        // Kunden sletter KUN sin egen tilmelding.
-        // Eventet ændres ikke af kunden.
         await runTransaction(
           db,
           async (transaction) => {
-            const registrationSnap =
+            const snapshot =
               await transaction.get(
                 registrationRef
               );
 
             if (
-              !registrationSnap.exists()
+              !snapshot.exists()
             ) {
               throw new Error(
                 "Tilmeldingen findes ikke længere."
+              );
+            }
+
+            const data =
+              snapshot.data();
+
+            /*
+             * Ekstra sikkerhed i klienten.
+             *
+             * Vi kontrollerer, at den tilmelding
+             * faktisk tilhører den bruger, der
+             * forsøger at slette den.
+             */
+            const currentUser =
+              auth.currentUser;
+
+            if (
+              !currentUser?.phoneNumber
+            ) {
+              throw new Error(
+                "Du skal være logget ind."
+              );
+            }
+
+            if (
+              data.phone !==
+              currentUser.phoneNumber
+            ) {
+              throw new Error(
+                "Du kan kun afmelde dine egne tilmeldinger."
               );
             }
 
@@ -703,25 +874,19 @@ export default function HomePage() {
     <main
       style={{
         maxWidth: 700,
-        margin:
-          "40px auto",
-        padding:
-          "0 20px",
-        fontFamily:
-          "system-ui",
+        margin: "40px auto",
+        padding: "0 20px",
+        fontFamily: "system-ui",
       }}
     >
       <div
         style={{
-          display:
-            "flex",
+          display: "flex",
           justifyContent:
             "space-between",
-          alignItems:
-            "center",
+          alignItems: "center",
           gap: 15,
-          marginBottom:
-            25,
+          marginBottom: 25,
         }}
       >
         <h1>
@@ -758,10 +923,8 @@ export default function HomePage() {
       {message && (
         <p
           style={{
-            color:
-              "green",
-            fontWeight:
-              "bold",
+            color: "green",
+            fontWeight: "bold",
           }}
         >
           {message}
@@ -771,10 +934,8 @@ export default function HomePage() {
       {error && (
         <p
           style={{
-            color:
-              "crimson",
-            fontWeight:
-              "bold",
+            color: "crimson",
+            fontWeight: "bold",
           }}
         >
           {error}
@@ -786,11 +947,9 @@ export default function HomePage() {
           style={{
             border:
               "1px solid #ddd",
-            borderRadius:
-              10,
+            borderRadius: 10,
             padding: 20,
-            marginBottom:
-              30,
+            marginBottom: 30,
           }}
         >
           <h2>
@@ -873,10 +1032,9 @@ export default function HomePage() {
           ) : (
             <>
               <p>
-                Indtast den
-                kode, du har
-                modtaget på
-                SMS.
+                Indtast koden,
+                du har modtaget
+                på SMS.
               </p>
 
               <input
@@ -968,11 +1126,9 @@ export default function HomePage() {
           style={{
             border:
               "1px solid #ddd",
-            borderRadius:
-              10,
+            borderRadius: 10,
             padding: 20,
-            marginBottom:
-              35,
+            marginBottom: 35,
           }}
         >
           <h2>
@@ -998,11 +1154,9 @@ export default function HomePage() {
                   style={{
                     border:
                       "1px solid #ddd",
-                    borderRadius:
-                      8,
+                    borderRadius: 8,
                     padding: 15,
-                    marginBottom:
-                      10,
+                    marginBottom: 10,
                   }}
                 >
                   <strong>
@@ -1013,8 +1167,7 @@ export default function HomePage() {
 
                   <div
                     style={{
-                      marginTop:
-                        5,
+                      marginTop: 6,
                     }}
                   >
                     Status:{" "}
@@ -1029,31 +1182,33 @@ export default function HomePage() {
                     </strong>
                   </div>
 
-                  <button
-                    onClick={() =>
-                      cancelRegistration(
-                        registration
-                      )
-                    }
-                    style={{
-                      marginTop:
-                        12,
-                      padding:
-                        "9px 15px",
-                      background:
-                        "#d32f2f",
-                      color:
-                        "white",
-                      border:
-                        "none",
-                      borderRadius:
-                        4,
-                      cursor:
-                        "pointer",
-                    }}
-                  >
-                    Afmeld
-                  </button>
+                  {registration.status !==
+                    "rejected" && (
+                    <button
+                      onClick={() =>
+                        cancelRegistration(
+                          registration
+                        )
+                      }
+                      style={{
+                        marginTop: 12,
+                        padding:
+                          "9px 15px",
+                        background:
+                          "#d32f2f",
+                        color:
+                          "white",
+                        border:
+                          "none",
+                        borderRadius:
+                          4,
+                        cursor:
+                          "pointer",
+                      }}
+                    >
+                      Afmeld
+                    </button>
+                  )}
                 </div>
               )
             )
@@ -1090,10 +1245,8 @@ export default function HomePage() {
                     border:
                       "1px solid #ddd",
                     padding: 15,
-                    marginBottom:
-                      10,
-                    borderRadius:
-                      8,
+                    marginBottom: 10,
+                    borderRadius: 8,
                   }}
                 >
                   <strong>
@@ -1104,18 +1257,15 @@ export default function HomePage() {
 
                   {event.startAt && (
                     <div>
-                      {event.startAt
-                        .toDate()
-                        .toLocaleString(
-                          "da-DK"
-                        )}
+                      {formatDate(
+                        event.startAt
+                      )}
                     </div>
                   )}
 
                   <div
                     style={{
-                      marginTop:
-                        8,
+                      marginTop: 8,
                       fontWeight:
                         "bold",
                     }}
@@ -1133,8 +1283,7 @@ export default function HomePage() {
                   {full && (
                     <div
                       style={{
-                        marginTop:
-                          5,
+                        marginTop: 5,
                         color:
                           "crimson",
                         fontWeight:
@@ -1163,11 +1312,9 @@ export default function HomePage() {
               )
             }
             style={{
-              width:
-                "100%",
+              width: "100%",
               padding: 10,
-              marginBottom:
-                10,
+              marginBottom: 10,
             }}
           >
             {events.map(
@@ -1217,8 +1364,7 @@ export default function HomePage() {
               width:
                 "100%",
               padding: 10,
-              marginBottom:
-                10,
+              marginBottom: 10,
               boxSizing:
                 "border-box",
             }}
@@ -1239,62 +1385,52 @@ export default function HomePage() {
               width:
                 "100%",
               padding: 10,
-              marginBottom:
-                10,
+              marginBottom: 10,
               boxSizing:
                 "border-box",
             }}
           />
 
-          {(() => {
-            const selected =
-              events.find(
-                (event) =>
-                  event.id ===
-                  selectedEvent
-              );
+          <button
+            onClick={
+              submitRegistration
+            }
+            disabled={
+              sending ||
+              (() => {
+                const event =
+                  events.find(
+                    (item) =>
+                      item.id ===
+                      selectedEvent
+                  );
 
-            const full =
-              selected &&
-              selected.maxApproved >
-                0 &&
-              selected.approvedCount >=
-                selected.maxApproved;
-
-            return (
-              <button
-                onClick={
-                  submitRegistration
-                }
-                disabled={
-                  Boolean(
-                    full
-                  ) ||
-                  sending
-                }
-                style={{
-                  padding:
-                    "10px 20px",
-                  cursor:
-                    full ||
-                    sending
-                      ? "not-allowed"
-                      : "pointer",
-                  opacity:
-                    full ||
-                    sending
-                      ? 0.5
-                      : 1,
-                }}
-              >
-                {sending
-                  ? "Sender..."
-                  : full
-                  ? "Fuldt booket"
-                  : "Send tilmelding"}
-              </button>
-            );
-          })()}
+                return Boolean(
+                  event &&
+                    event.maxApproved >
+                      0 &&
+                    event.approvedCount >=
+                      event.maxApproved
+                );
+              })()
+            }
+            style={{
+              padding:
+                "10px 20px",
+              cursor:
+                sending
+                  ? "not-allowed"
+                  : "pointer",
+              opacity:
+                sending
+                  ? 0.5
+                  : 1,
+            }}
+          >
+            {sending
+              ? "Sender..."
+              : "Send tilmelding"}
+          </button>
         </>
       )}
     </main>
