@@ -56,6 +56,15 @@ export default function AdminPage() {
   const [maxApproved, setMaxApproved] = useState(10);
   const [isOpen, setIsOpen] = useState(true);
 
+  const [editingEventId, setEditingEventId] =
+    useState<string | null>(null);
+
+  const [editTitle, setEditTitle] = useState("");
+  const [editStartAt, setEditStartAt] = useState("");
+  const [editMaxApproved, setEditMaxApproved] =
+    useState(10);
+  const [editIsOpen, setEditIsOpen] = useState(true);
+
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
@@ -177,6 +186,134 @@ export default function AdminPage() {
     }
   }
 
+  function formatDateTimeForInput(
+    timestamp?: Timestamp
+  ) {
+    if (!timestamp) return "";
+
+    const date = timestamp.toDate();
+
+    const year = date.getFullYear();
+    const month = String(
+      date.getMonth() + 1
+    ).padStart(2, "0");
+
+    const day = String(
+      date.getDate()
+    ).padStart(2, "0");
+
+    const hours = String(
+      date.getHours()
+    ).padStart(2, "0");
+
+    const minutes = String(
+      date.getMinutes()
+    ).padStart(2, "0");
+
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
+  }
+
+  function startEditing(event: EventItem) {
+    setEditingEventId(event.id);
+
+    setEditTitle(event.title);
+
+    setEditStartAt(
+      formatDateTimeForInput(
+        event.startAt
+      )
+    );
+
+    setEditMaxApproved(
+      event.maxApproved
+    );
+
+    setEditIsOpen(event.isOpen);
+
+    setMsg("");
+    setErr("");
+  }
+
+  function cancelEditing() {
+    setEditingEventId(null);
+    setEditTitle("");
+    setEditStartAt("");
+    setEditMaxApproved(10);
+    setEditIsOpen(true);
+  }
+
+  async function saveEventChanges(
+    event: EventItem
+  ) {
+    setMsg("");
+    setErr("");
+
+    if (!editTitle.trim()) {
+      setErr("Indtast et eventnavn.");
+      return;
+    }
+
+    if (!editStartAt) {
+      setErr(
+        "Vælg dato og tidspunkt."
+      );
+      return;
+    }
+
+    if (editMaxApproved < 1) {
+      setErr(
+        "Antal pladser skal være mindst 1."
+      );
+      return;
+    }
+
+    if (
+      editMaxApproved <
+      event.approvedCount
+    ) {
+      setErr(
+        `Antal pladser kan ikke sættes lavere end ${event.approvedCount}, fordi der allerede er ${event.approvedCount} godkendte.`
+      );
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      await updateDoc(
+        doc(db, "events", event.id),
+        {
+          title:
+            editTitle.trim(),
+
+          startAt:
+            new Date(editStartAt),
+
+          maxApproved:
+            Number(editMaxApproved),
+
+          isOpen:
+            editIsOpen,
+        }
+      );
+
+      cancelEditing();
+
+      await loadEvents();
+
+      setMsg(
+        "Event opdateret ✓"
+      );
+    } catch (e: any) {
+      setErr(
+        e?.message ??
+          "Eventet kunne ikke opdateres."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function createEvent() {
     setMsg("");
     setErr("");
@@ -206,12 +343,19 @@ export default function AdminPage() {
       await addDoc(
         collection(db, "events"),
         {
-          title: title.trim(),
-          startAt: new Date(startAt),
+          title:
+            title.trim(),
+
+          startAt:
+            new Date(startAt),
+
           maxApproved:
             Number(maxApproved),
+
           approvedCount: 0,
+
           isOpen,
+
           createdAt:
             serverTimestamp(),
         }
@@ -244,7 +388,8 @@ export default function AdminPage() {
       await updateDoc(
         doc(db, "events", event.id),
         {
-          isOpen: !event.isOpen,
+          isOpen:
+            !event.isOpen,
         }
       );
 
@@ -281,7 +426,10 @@ export default function AdminPage() {
 
       const registrationSnap =
         await getDocs(
-          collection(db, "registrations")
+          collection(
+            db,
+            "registrations"
+          )
         );
 
       const batch = writeBatch(db);
@@ -307,7 +455,11 @@ export default function AdminPage() {
       );
 
       batch.delete(
-        doc(db, "events", event.id)
+        doc(
+          db,
+          "events",
+          event.id
+        )
       );
 
       await batch.commit();
@@ -340,11 +492,12 @@ export default function AdminPage() {
               registration.id
             );
 
-          const eventRef = doc(
-            db,
-            "events",
-            registration.eventId
-          );
+          const eventRef =
+            doc(
+              db,
+              "events",
+              registration.eventId
+            );
 
           const registrationSnap =
             await transaction.get(
@@ -408,7 +561,8 @@ export default function AdminPage() {
           transaction.update(
             registrationRef,
             {
-              status: "approved",
+              status:
+                "approved",
             }
           );
 
@@ -416,7 +570,8 @@ export default function AdminPage() {
             eventRef,
             {
               approvedCount:
-                approvedCount + 1,
+                approvedCount +
+                1,
             }
           );
         }
@@ -447,7 +602,8 @@ export default function AdminPage() {
           registration.id
         ),
         {
-          status: "rejected",
+          status:
+            "rejected",
         }
       );
 
@@ -469,8 +625,10 @@ export default function AdminPage() {
       <main
         style={{
           maxWidth: 500,
-          margin: "60px auto",
-          padding: "0 20px",
+          margin:
+            "60px auto",
+          padding:
+            "0 20px",
           fontFamily:
             "system-ui",
         }}
@@ -497,7 +655,8 @@ export default function AdminPage() {
         {msg && (
           <p
             style={{
-              color: "green",
+              color:
+                "green",
             }}
           >
             {msg}
@@ -514,9 +673,11 @@ export default function AdminPage() {
             )
           }
           style={{
-            width: "100%",
+            width:
+              "100%",
             padding: 12,
-            marginBottom: 10,
+            marginBottom:
+              10,
             boxSizing:
               "border-box",
           }}
@@ -532,9 +693,11 @@ export default function AdminPage() {
             )
           }
           style={{
-            width: "100%",
+            width:
+              "100%",
             padding: 12,
-            marginBottom: 10,
+            marginBottom:
+              10,
             boxSizing:
               "border-box",
           }}
@@ -556,8 +719,10 @@ export default function AdminPage() {
   return (
     <main
       style={{
-        maxWidth: 1000,
-        margin: "0 auto",
+        maxWidth:
+          1000,
+        margin:
+          "0 auto",
         padding:
           "30px 20px",
         fontFamily:
@@ -566,12 +731,14 @@ export default function AdminPage() {
     >
       <div
         style={{
-          display: "flex",
+          display:
+            "flex",
           justifyContent:
             "space-between",
           alignItems:
             "center",
-          marginBottom: 30,
+          marginBottom:
+            30,
         }}
       >
         <h1>
@@ -579,7 +746,9 @@ export default function AdminPage() {
         </h1>
 
         <button
-          onClick={logout}
+          onClick={
+            logout
+          }
         >
           Log ud
         </button>
@@ -589,10 +758,12 @@ export default function AdminPage() {
         <div
           style={{
             padding: 12,
-            marginBottom: 15,
+            marginBottom:
+              15,
             background:
               "#e8f5e9",
-            borderRadius: 8,
+            borderRadius:
+              8,
           }}
         >
           {msg}
@@ -603,12 +774,14 @@ export default function AdminPage() {
         <div
           style={{
             padding: 12,
-            marginBottom: 15,
+            marginBottom:
+              15,
             background:
               "#ffebee",
             color:
               "#b71c1c",
-            borderRadius: 8,
+            borderRadius:
+              8,
           }}
         >
           {err}
@@ -619,7 +792,8 @@ export default function AdminPage() {
         Events
       </h2>
 
-      {events.length === 0 ? (
+      {events.length ===
+      0 ? (
         <p>
           Ingen events.
         </p>
@@ -660,128 +834,309 @@ export default function AdminPage() {
               event.approvedCount >=
                 event.maxApproved;
 
+            const isEditing =
+              editingEventId ===
+              event.id;
+
             return (
               <div
-                key={event.id}
+                key={
+                  event.id
+                }
                 style={{
                   border:
                     "1px solid #ccc",
-                  borderRadius: 12,
-                  padding: 20,
-                  marginBottom: 20,
+                  borderRadius:
+                    12,
+                  padding:
+                    20,
+                  marginBottom:
+                    20,
                 }}
               >
-                <h3
-                  style={{
-                    marginTop: 0,
-                  }}
-                >
-                  {event.title}
-                </h3>
+                {!isEditing ? (
+                  <>
+                    <h3
+                      style={{
+                        marginTop:
+                          0,
+                      }}
+                    >
+                      {
+                        event.title
+                      }
+                    </h3>
 
-                <div>
-                  <strong>
-                    Dato:
-                  </strong>{" "}
-                  {event.startAt
-                    ? event.startAt
-                        .toDate()
-                        .toLocaleString(
-                          "da-DK"
+                    <div>
+                      <strong>
+                        Dato:
+                      </strong>{" "}
+                      {event.startAt
+                        ? event.startAt
+                            .toDate()
+                            .toLocaleString(
+                              "da-DK"
+                            )
+                        : "Ikke angivet"}
+                    </div>
+
+                    <div>
+                      <strong>
+                        Pladser:
+                      </strong>{" "}
+                      {
+                        event.approvedCount
+                      }{" "}
+                      /{" "}
+                      {
+                        event.maxApproved
+                      }
+                    </div>
+
+                    <div
+                      style={{
+                        marginTop:
+                          8,
+                        fontWeight:
+                          "bold",
+                        color:
+                          full
+                            ? "crimson"
+                            : event.isOpen
+                            ? "green"
+                            : "#666",
+                      }}
+                    >
+                      {full
+                        ? "FULDT BOOKET"
+                        : event.isOpen
+                        ? "ÅBEN"
+                        : "LUKKET"}
+                    </div>
+
+                    <div
+                      style={{
+                        marginTop:
+                          12,
+                        display:
+                          "flex",
+                        gap: 8,
+                        flexWrap:
+                          "wrap",
+                      }}
+                    >
+                      <button
+                        onClick={() =>
+                          startEditing(
+                            event
+                          )
+                        }
+                        style={{
+                          padding:
+                            "9px 15px",
+                        }}
+                      >
+                        Rediger
+                      </button>
+
+                      <button
+                        onClick={() =>
+                          toggleEvent(
+                            event
+                          )
+                        }
+                        style={{
+                          padding:
+                            "9px 15px",
+                        }}
+                      >
+                        {event.isOpen
+                          ? "Luk event"
+                          : "Åbn event"}
+                      </button>
+
+                      <button
+                        onClick={() =>
+                          deleteEvent(
+                            event
+                          )
+                        }
+                        style={{
+                          padding:
+                            "9px 15px",
+                          background:
+                            "#d32f2f",
+                          color:
+                            "white",
+                          border:
+                            "none",
+                          borderRadius:
+                            4,
+                          cursor:
+                            "pointer",
+                        }}
+                      >
+                        Slet event
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <div>
+                    <h3>
+                      Rediger event
+                    </h3>
+
+                    <input
+                      type="text"
+                      value={
+                        editTitle
+                      }
+                      onChange={(
+                        e
+                      ) =>
+                        setEditTitle(
+                          e.target
+                            .value
                         )
-                    : "Ikke angivet"}
-                </div>
+                      }
+                      placeholder="Eventnavn"
+                      style={{
+                        width:
+                          "100%",
+                        padding:
+                          10,
+                        marginBottom:
+                          10,
+                        boxSizing:
+                          "border-box",
+                      }}
+                    />
 
-                <div>
-                  <strong>
-                    Pladser:
-                  </strong>{" "}
-                  {
-                    event.approvedCount
-                  }{" "}
-                  /{" "}
-                  {
-                    event.maxApproved
-                  }
-                </div>
+                    <input
+                      type="datetime-local"
+                      value={
+                        editStartAt
+                      }
+                      onChange={(
+                        e
+                      ) =>
+                        setEditStartAt(
+                          e.target
+                            .value
+                        )
+                      }
+                      style={{
+                        width:
+                          "100%",
+                        padding:
+                          10,
+                        marginBottom:
+                          10,
+                        boxSizing:
+                          "border-box",
+                      }}
+                    />
+
+                    <input
+                      type="number"
+                      min={
+                        event.approvedCount
+                      }
+                      value={
+                        editMaxApproved
+                      }
+                      onChange={(
+                        e
+                      ) =>
+                        setEditMaxApproved(
+                          Number(
+                            e.target
+                              .value
+                          )
+                        )
+                      }
+                      style={{
+                        width:
+                          "100%",
+                        padding:
+                          10,
+                        marginBottom:
+                          10,
+                        boxSizing:
+                          "border-box",
+                      }}
+                    />
+
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={
+                          editIsOpen
+                        }
+                        onChange={(
+                          e
+                        ) =>
+                          setEditIsOpen(
+                            e
+                              .target
+                              .checked
+                          )
+                        }
+                      />{" "}
+                      Åben for tilmelding
+                    </label>
+
+                    <div
+                      style={{
+                        marginTop:
+                          15,
+                        display:
+                          "flex",
+                        gap: 8,
+                      }}
+                    >
+                      <button
+                        onClick={() =>
+                          saveEventChanges(
+                            event
+                          )
+                        }
+                        disabled={
+                          loading
+                        }
+                        style={{
+                          padding:
+                            "9px 15px",
+                        }}
+                      >
+                        {loading
+                          ? "Gemmer..."
+                          : "Gem ændringer"}
+                      </button>
+
+                      <button
+                        onClick={
+                          cancelEditing
+                        }
+                        style={{
+                          padding:
+                            "9px 15px",
+                        }}
+                      >
+                        Annuller
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 <div
                   style={{
-                    marginTop: 8,
-                    fontWeight:
-                      "bold",
-                    color: full
-                      ? "crimson"
-                      : event.isOpen
-                      ? "green"
-                      : "#666",
-                  }}
-                >
-                  {full
-                    ? "FULDT BOOKET"
-                    : event.isOpen
-                    ? "ÅBEN"
-                    : "LUKKET"}
-                </div>
-
-                <div
-                  style={{
-                    marginTop: 12,
-                    display:
-                      "flex",
-                    gap: 8,
-                    flexWrap:
-                      "wrap",
-                  }}
-                >
-                  <button
-                    onClick={() =>
-                      toggleEvent(
-                        event
-                      )
-                    }
-                    style={{
-                      padding:
-                        "9px 15px",
-                      cursor:
-                        "pointer",
-                    }}
-                  >
-                    {event.isOpen
-                      ? "Luk event"
-                      : "Åbn event"}
-                  </button>
-
-                  <button
-                    onClick={() =>
-                      deleteEvent(
-                        event
-                      )
-                    }
-                    style={{
-                      padding:
-                        "9px 15px",
-                      background:
-                        "#d32f2f",
-                      color:
-                        "white",
-                      border:
-                        "none",
-                      borderRadius: 4,
-                      cursor:
-                        "pointer",
-                    }}
-                  >
-                    Slet event
-                  </button>
-                </div>
-
-                <div
-                  style={{
-                    marginTop: 25,
+                    marginTop:
+                      25,
                     borderTop:
                       "1px solid #ddd",
-                    paddingTop: 15,
+                    paddingTop:
+                      15,
                   }}
                 >
                   <h4>
@@ -847,7 +1202,8 @@ export default function AdminPage() {
 
                         <div
                           style={{
-                            marginTop: 8,
+                            marginTop:
+                              8,
                           }}
                         >
                           <button
@@ -947,9 +1303,11 @@ export default function AdminPage() {
         style={{
           border:
             "1px solid #ddd",
-          borderRadius: 10,
+          borderRadius:
+            10,
           padding: 20,
-          marginTop: 40,
+          marginTop:
+            40,
         }}
       >
         <h2>
@@ -966,9 +1324,11 @@ export default function AdminPage() {
             )
           }
           style={{
-            width: "100%",
+            width:
+              "100%",
             padding: 12,
-            marginBottom: 10,
+            marginBottom:
+              10,
             boxSizing:
               "border-box",
           }}
@@ -983,9 +1343,11 @@ export default function AdminPage() {
             )
           }
           style={{
-            width: "100%",
+            width:
+              "100%",
             padding: 12,
-            marginBottom: 10,
+            marginBottom:
+              10,
             boxSizing:
               "border-box",
           }}
@@ -994,18 +1356,23 @@ export default function AdminPage() {
         <input
           type="number"
           min="1"
-          value={maxApproved}
+          value={
+            maxApproved
+          }
           onChange={(e) =>
             setMaxApproved(
               Number(
-                e.target.value
+                e.target
+                  .value
               )
             )
           }
           style={{
-            width: "100%",
+            width:
+              "100%",
             padding: 12,
-            marginBottom: 10,
+            marginBottom:
+              10,
             boxSizing:
               "border-box",
           }}
@@ -1014,10 +1381,13 @@ export default function AdminPage() {
         <label>
           <input
             type="checkbox"
-            checked={isOpen}
+            checked={
+              isOpen
+            }
             onChange={(e) =>
               setIsOpen(
-                e.target.checked
+                e.target
+                  .checked
               )
             }
           />{" "}
@@ -1031,14 +1401,12 @@ export default function AdminPage() {
           onClick={
             createEvent
           }
-          disabled={loading}
+          disabled={
+            loading
+          }
           style={{
             padding:
               "12px 20px",
-            cursor:
-              loading
-                ? "not-allowed"
-                : "pointer",
           }}
         >
           {loading
