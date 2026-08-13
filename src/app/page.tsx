@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-
 import {
   addDoc,
   collection,
   getDocs,
   Timestamp,
+  runTransaction,
+  doc,
 } from "firebase/firestore";
 
 import { db } from "../lib/firebase";
@@ -31,12 +32,11 @@ type Event = {
 export default function HomePage() {
   const [events, setEvents] = useState<Event[]>([]);
   const [selectedEvent, setSelectedEvent] = useState("");
-
   const [username, setUsername] = useState("");
   const [phone, setPhone] = useState("");
-
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [sending, setSending] = useState(false);
 
   const loadEvents = async () => {
     try {
@@ -44,11 +44,11 @@ export default function HomePage() {
         collection(db, "events")
       );
 
-      const parsed: Event[] = snap.docs.map((doc) => {
-        const d = doc.data() as EventDoc;
+      const parsed: Event[] = snap.docs.map((eventDoc) => {
+        const d = eventDoc.data() as EventDoc;
 
         return {
-          id: doc.id,
+          id: eventDoc.id,
           title: d.title ?? "Uden titel",
           isOpen: Boolean(d.isOpen),
           startAt: d.startAt,
@@ -82,7 +82,6 @@ export default function HomePage() {
   useEffect(() => {
     loadEvents();
 
-    // Opdater pladstal automatisk hvert 5. sekund
     const interval = setInterval(() => {
       loadEvents();
     }, 5000);
@@ -91,63 +90,93 @@ export default function HomePage() {
   }, []);
 
   const submitRegistration = async () => {
+    if (sending) return;
+
     setMessage("");
     setError("");
+    setSending(true);
 
     if (!selectedEvent) {
       setError("Vælg et event.");
+      setSending(false);
       return;
     }
 
     if (!username.trim()) {
       setError("Indtast dit brugernavn.");
+      setSending(false);
       return;
     }
 
     if (!phone.trim()) {
       setError("Indtast dit telefonnummer.");
-      return;
-    }
-
-    const event = events.find(
-      (e) => e.id === selectedEvent
-    );
-
-    if (!event) {
-      setError(
-        "Det valgte event blev ikke fundet."
-      );
-      return;
-    }
-
-    const approvedCount =
-      event.approvedCount ?? 0;
-
-    const maxApproved =
-      event.maxApproved ?? 0;
-
-    if (
-      maxApproved > 0 &&
-      approvedCount >= maxApproved
-    ) {
-      setError(
-        "Eventet er fuldt booket."
-      );
+      setSending(false);
       return;
     }
 
     try {
-      await addDoc(
-        collection(db, "registrations"),
-        {
-          eventId: event.id,
-          eventTitle: event.title,
-          username: username.trim(),
-          phone: phone.trim(),
-          status: "pending",
-          createdAt: new Date(),
-        }
+      const eventRef = doc(
+        db,
+        "events",
+        selectedEvent
       );
+
+      await runTransaction(db, async (transaction) => {
+        const eventSnap =
+          await transaction.get(eventRef);
+
+        if (!eventSnap.exists()) {
+          throw new Error(
+            "Eventet findes ikke længere."
+          );
+        }
+
+        const eventData =
+          eventSnap.data() as EventDoc;
+
+        if (!eventData.isOpen) {
+          throw new Error(
+            "Eventet er ikke længere åbent for tilmelding."
+          );
+        }
+
+        const approvedCount =
+          Number(
+            eventData.approvedCount ?? 0
+          );
+
+        const maxApproved =
+          Number(
+            eventData.maxApproved ?? 0
+          );
+
+        if (
+          maxApproved > 0 &&
+          approvedCount >= maxApproved
+        ) {
+          throw new Error(
+            "Eventet er fuldt booket."
+          );
+        }
+
+        const registrationRef = doc(
+          collection(db, "registrations")
+        );
+
+        transaction.set(
+          registrationRef,
+          {
+            eventId: selectedEvent,
+            eventTitle:
+              eventData.title ??
+              "Uden titel",
+            username: username.trim(),
+            phone: phone.trim(),
+            status: "pending",
+            createdAt: new Date(),
+          }
+        );
+      });
 
       setMessage(
         "Tak! Din tilmelding er modtaget og afventer godkendelse."
@@ -162,6 +191,8 @@ export default function HomePage() {
         e?.message ??
           "Tilmeldingen kunne ikke sendes."
       );
+    } finally {
+      setSending(false);
     }
   };
 
@@ -347,16 +378,22 @@ export default function HomePage() {
             return (
               <button
                 onClick={submitRegistration}
-                disabled={Boolean(full)}
+                disabled={
+                  Boolean(full) || sending
+                }
                 style={{
                   padding: "10px 20px",
-                  cursor: full
-                    ? "not-allowed"
-                    : "pointer",
-                  opacity: full ? 0.5 : 1,
+                  cursor:
+                    full || sending
+                      ? "not-allowed"
+                      : "pointer",
+                  opacity:
+                    full || sending ? 0.5 : 1,
                 }}
               >
-                {full
+                {sending
+                  ? "Sender..."
+                  : full
                   ? "Fuldt booket"
                   : "Send tilmelding"}
               </button>
