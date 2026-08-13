@@ -1,22 +1,25 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import {
-  addDoc,
   collection,
-  deleteDoc,
-  doc,
   getDocs,
   runTransaction,
-  serverTimestamp,
+  doc,
   Timestamp,
-  updateDoc,
 } from "firebase/firestore";
 
-import { auth, db } from "../../lib/firebase";
+import { db } from "../lib/firebase";
 
-type EventItem = {
+type EventDoc = {
+  title?: string;
+  isOpen?: boolean;
+  startAt?: Timestamp;
+  maxApproved?: number;
+  approvedCount?: number;
+};
+
+type Event = {
   id: string;
   title: string;
   isOpen: boolean;
@@ -25,744 +28,446 @@ type EventItem = {
   approvedCount: number;
 };
 
-type Registration = {
-  id: string;
-  eventId: string;
-  eventTitle: string;
-  username: string;
-  phone: string;
-  status: "pending" | "approved" | "rejected";
-};
+export default function HomePage() {
+  const [events, setEvents] = useState<Event[]>([]);
+  const [selectedEvent, setSelectedEvent] = useState("");
+  const [username, setUsername] = useState("");
+  const [phone, setPhone] = useState("");
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [sending, setSending] = useState(false);
 
-export default function AdminPage() {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [loggedIn, setLoggedIn] = useState(false);
-
-  const [events, setEvents] = useState<EventItem[]>([]);
-  const [registrations, setRegistrations] = useState<Registration[]>([]);
-
-  const [title, setTitle] = useState("");
-  const [startAt, setStartAt] = useState("");
-  const [maxApproved, setMaxApproved] = useState(10);
-  const [isOpen, setIsOpen] = useState(true);
-
-  const [msg, setMsg] = useState("");
-  const [err, setErr] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    return onAuthStateChanged(auth, async (user) => {
-      if (user) {
-        setLoggedIn(true);
-        await loadEvents();
-        await loadRegistrations();
-      } else {
-        setLoggedIn(false);
-        setEvents([]);
-        setRegistrations([]);
-      }
-    });
-  }, []);
-
-  async function login() {
-    setMsg("");
-    setErr("");
-
+  const loadEvents = async () => {
     try {
-      await signInWithEmailAndPassword(
-        auth,
-        email.trim(),
-        password
+      const snap = await getDocs(
+        collection(db, "events")
       );
-      setMsg("Logget ind ✓");
-    } catch (e: any) {
-      setErr(e?.message ?? "Login mislykkedes.");
-    }
-  }
 
-  async function logout() {
-    await signOut(auth);
-  }
-
-  async function loadEvents() {
-    try {
-      const snap = await getDocs(collection(db, "events"));
-
-      const data: EventItem[] = snap.docs
-        .map((item) => {
-          const d = item.data();
+      const parsed: Event[] = snap.docs
+        .map((eventDoc) => {
+          const d = eventDoc.data() as EventDoc;
 
           return {
-            id: item.id,
+            id: eventDoc.id,
             title: d.title ?? "Uden titel",
             isOpen: Boolean(d.isOpen),
             startAt: d.startAt,
-            maxApproved: Number(d.maxApproved ?? 0),
-            approvedCount: Number(d.approvedCount ?? 0),
+            maxApproved: Number(
+              d.maxApproved ?? 0
+            ),
+            approvedCount: Number(
+              d.approvedCount ?? 0
+            ),
           };
         })
-        .sort(
-          (a, b) =>
-            (a.startAt?.toMillis() ?? 0) -
-            (b.startAt?.toMillis() ?? 0)
+        .sort((a, b) => {
+          const aTime =
+            a.startAt?.toMillis() ?? 0;
+          const bTime =
+            b.startAt?.toMillis() ?? 0;
+
+          return aTime - bTime;
+        });
+
+      const openEvents = parsed.filter(
+        (event) => event.isOpen
+      );
+
+      setEvents(openEvents);
+
+      if (
+        openEvents.length > 0 &&
+        !openEvents.some(
+          (event) =>
+            event.id === selectedEvent
+        )
+      ) {
+        setSelectedEvent(
+          openEvents[0].id
         );
+      }
 
-      setEvents(data);
+      if (openEvents.length === 0) {
+        setSelectedEvent("");
+      }
     } catch (e: any) {
-      setErr(e?.message ?? "Kunne ikke hente events.");
-    }
-  }
-
-  async function loadRegistrations() {
-    try {
-      const snap = await getDocs(
-        collection(db, "registrations")
-      );
-
-      const data: Registration[] = snap.docs.map((item) => {
-        const d = item.data();
-
-        return {
-          id: item.id,
-          eventId: d.eventId ?? "",
-          eventTitle: d.eventTitle ?? "Ukendt event",
-          username: d.username ?? "",
-          phone: d.phone ?? "",
-          status: d.status ?? "pending",
-        };
-      });
-
-      setRegistrations(data);
-    } catch (e: any) {
-      setErr(
-        e?.message ?? "Kunne ikke hente tilmeldinger."
+      setError(
+        e?.message ??
+          "Kunne ikke hente events."
       );
     }
-  }
+  };
 
-  async function createEvent() {
-    setMsg("");
-    setErr("");
+  useEffect(() => {
+    loadEvents();
 
-    if (!title.trim()) {
-      setErr("Indtast et eventnavn.");
-      return;
-    }
-
-    if (!startAt) {
-      setErr("Vælg dato og tidspunkt.");
-      return;
-    }
-
-    try {
-      setLoading(true);
-
-      await addDoc(collection(db, "events"), {
-        title: title.trim(),
-        startAt: new Date(startAt),
-        maxApproved: Number(maxApproved),
-        approvedCount: 0,
-        isOpen,
-        createdAt: serverTimestamp(),
-      });
-
-      setTitle("");
-      setStartAt("");
-      setMaxApproved(10);
-      setIsOpen(true);
-
-      await loadEvents();
-
-      setMsg("Event oprettet ✓");
-    } catch (e: any) {
-      setErr(e?.message ?? "Eventet kunne ikke oprettes.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function toggleEvent(event: EventItem) {
-    try {
-      await updateDoc(doc(db, "events", event.id), {
-        isOpen: !event.isOpen,
-      });
-
-      await loadEvents();
-
-      setMsg(
-        event.isOpen
-          ? "Event lukket."
-          : "Event åbnet."
-      );
-    } catch (e: any) {
-      setErr(
-        e?.message ?? "Eventets status kunne ikke ændres."
-      );
-    }
-  }
-
-  async function deleteEvent(event: EventItem) {
-    const confirmed = window.confirm(
-      `Er du sikker på, at du vil slette "${event.title}"?\n\nEventet slettes permanent.`
+    const interval = setInterval(
+      loadEvents,
+      5000
     );
 
-    if (!confirmed) return;
+    return () =>
+      clearInterval(interval);
+  }, []);
 
-    try {
-      setMsg("");
-      setErr("");
+  const submitRegistration =
+    async () => {
+      if (sending) return;
 
-      await deleteDoc(doc(db, "events", event.id));
+      setMessage("");
+      setError("");
+      setSending(true);
 
-      await loadEvents();
+      if (!selectedEvent) {
+        setError("Vælg et event.");
+        setSending(false);
+        return;
+      }
 
-      setMsg(`"${event.title}" er slettet ✓`);
-    } catch (e: any) {
-      setErr(
-        e?.message ?? "Eventet kunne ikke slettes."
-      );
-    }
-  }
-
-  async function approveRegistration(
-    registration: Registration
-  ) {
-    try {
-      await runTransaction(db, async (transaction) => {
-        const registrationRef = doc(
-          db,
-          "registrations",
-          registration.id
+      if (!username.trim()) {
+        setError(
+          "Indtast dit brugernavn."
         );
+        setSending(false);
+        return;
+      }
 
+      if (!phone.trim()) {
+        setError(
+          "Indtast dit telefonnummer."
+        );
+        setSending(false);
+        return;
+      }
+
+      try {
         const eventRef = doc(
           db,
           "events",
-          registration.eventId
+          selectedEvent
         );
 
-        const registrationSnap =
-          await transaction.get(registrationRef);
-
-        const eventSnap =
-          await transaction.get(eventRef);
-
-        if (!registrationSnap.exists()) {
-          throw new Error(
-            "Tilmeldingen findes ikke længere."
-          );
-        }
-
-        if (!eventSnap.exists()) {
-          throw new Error(
-            "Eventet findes ikke længere."
-          );
-        }
-
-        const registrationData =
-          registrationSnap.data();
-
-        const eventData = eventSnap.data();
-
-        if (
-          registrationData.status === "approved"
-        ) {
-          return;
-        }
-
-        const approvedCount = Number(
-          eventData.approvedCount ?? 0
-        );
-
-        const maxApproved = Number(
-          eventData.maxApproved ?? 0
-        );
-
-        if (
-          maxApproved > 0 &&
-          approvedCount >= maxApproved
-        ) {
-          throw new Error(
-            "Eventet er fuldt booket."
-          );
-        }
-
-        transaction.update(registrationRef, {
-          status: "approved",
-        });
-
-        transaction.update(eventRef, {
-          approvedCount: approvedCount + 1,
-        });
-      });
-
-      await loadEvents();
-      await loadRegistrations();
-
-      setMsg("Tilmelding godkendt ✓");
-    } catch (e: any) {
-      setErr(
-        e?.message ??
-          "Tilmeldingen kunne ikke godkendes."
-      );
-    }
-  }
-
-  async function rejectRegistration(
-    registration: Registration
-  ) {
-    try {
-      await updateDoc(
-        doc(
+        await runTransaction(
           db,
-          "registrations",
-          registration.id
-        ),
-        {
-          status: "rejected",
-        }
-      );
+          async (transaction) => {
+            const eventSnap =
+              await transaction.get(
+                eventRef
+              );
 
-      await loadRegistrations();
+            if (!eventSnap.exists()) {
+              throw new Error(
+                "Eventet findes ikke længere."
+              );
+            }
 
-      setMsg("Tilmelding afvist.");
-    } catch (e: any) {
-      setErr(
-        e?.message ??
-          "Tilmeldingen kunne ikke afvises."
-      );
-    }
-  }
+            const eventData =
+              eventSnap.data() as EventDoc;
 
-  if (!loggedIn) {
-    return (
-      <main
-        style={{
-          maxWidth: 500,
-          margin: "60px auto",
-          padding: "0 20px",
-          fontFamily: "system-ui",
-        }}
-      >
-        <h1>PAR SAUNAGUS</h1>
-        <h2>Admin login</h2>
+            if (!eventData.isOpen) {
+              throw new Error(
+                "Eventet er ikke længere åbent for tilmelding."
+              );
+            }
 
-        {err && (
-          <p style={{ color: "crimson" }}>
-            {err}
-          </p>
-        )}
+            const approvedCount =
+              Number(
+                eventData.approvedCount ??
+                  0
+              );
 
-        <input
-          type="email"
-          placeholder="Admin e-mail"
-          value={email}
-          onChange={(e) =>
-            setEmail(e.target.value)
+            const maxApproved =
+              Number(
+                eventData.maxApproved ??
+                  0
+              );
+
+            if (
+              maxApproved > 0 &&
+              approvedCount >=
+                maxApproved
+            ) {
+              throw new Error(
+                "Eventet er fuldt booket."
+              );
+            }
+
+            const registrationRef =
+              doc(
+                collection(
+                  db,
+                  "registrations"
+                )
+              );
+
+            transaction.set(
+              registrationRef,
+              {
+                eventId:
+                  selectedEvent,
+                eventTitle:
+                  eventData.title ??
+                  "Uden titel",
+                username:
+                  username.trim(),
+                phone:
+                  phone.trim(),
+                status:
+                  "pending",
+                createdAt:
+                  Timestamp.now(),
+              }
+            );
           }
-          style={{
-            width: "100%",
-            padding: 12,
-            marginBottom: 10,
-            boxSizing: "border-box",
-          }}
-        />
+        );
 
-        <input
-          type="password"
-          placeholder="Adgangskode"
-          value={password}
-          onChange={(e) =>
-            setPassword(e.target.value)
-          }
-          style={{
-            width: "100%",
-            padding: 12,
-            marginBottom: 10,
-            boxSizing: "border-box",
-          }}
-        />
+        setMessage(
+          "Tak! Din tilmelding er modtaget og afventer godkendelse."
+        );
 
-        <button
-          onClick={login}
-          style={{
-            padding: "12px 20px",
-          }}
-        >
-          Log ind
-        </button>
-      </main>
-    );
-  }
+        setUsername("");
+        setPhone("");
+
+        await loadEvents();
+      } catch (e: any) {
+        setError(
+          e?.message ??
+            "Tilmeldingen kunne ikke sendes."
+        );
+      } finally {
+        setSending(false);
+      }
+    };
 
   return (
     <main
       style={{
-        maxWidth: 1000,
-        margin: "0 auto",
-        padding: "30px 20px",
-        fontFamily: "system-ui",
+        maxWidth: 700,
+        margin: "40px auto",
+        padding: "0 20px",
+        fontFamily:
+          "system-ui",
       }}
     >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: 30,
-        }}
-      >
-        <h1>PAR SAUNAGUS</h1>
+      <h1>
+        Saunagus – tilmelding
+      </h1>
 
-        <button onClick={logout}>
-          Log ud
-        </button>
-      </div>
-
-      {msg && (
-        <div
+      {message && (
+        <p
           style={{
-            padding: 12,
-            marginBottom: 15,
-            background: "#e8f5e9",
-            borderRadius: 8,
+            color: "green",
+            fontWeight:
+              "bold",
           }}
         >
-          {msg}
-        </div>
+          {message}
+        </p>
       )}
 
-      {err && (
-        <div
+      {error && (
+        <p
           style={{
-            padding: 12,
-            marginBottom: 15,
-            background: "#ffebee",
-            color: "#b71c1c",
-            borderRadius: 8,
+            color: "crimson",
+            fontWeight:
+              "bold",
           }}
         >
-          {err}
-        </div>
+          {error}
+        </p>
       )}
 
-      <h2>Events</h2>
+      <h2>Åbne events</h2>
 
-      {events.map((event) => {
-        const eventRegistrations =
-          registrations.filter(
-            (r) => r.eventId === event.id
-          );
+      {events.length === 0 ? (
+        <p>
+          Ingen åbne events lige nu.
+        </p>
+      ) : (
+        <>
+          {events.map((event) => {
+            const full =
+              event.maxApproved > 0 &&
+              event.approvedCount >=
+                event.maxApproved;
 
-        const pending =
-          eventRegistrations.filter(
-            (r) => r.status === "pending"
-          );
-
-        const approved =
-          eventRegistrations.filter(
-            (r) => r.status === "approved"
-          );
-
-        const rejected =
-          eventRegistrations.filter(
-            (r) => r.status === "rejected"
-          );
-
-        const full =
-          event.maxApproved > 0 &&
-          event.approvedCount >=
-            event.maxApproved;
-
-        return (
-          <div
-            key={event.id}
-            style={{
-              border: "1px solid #ccc",
-              borderRadius: 12,
-              padding: 20,
-              marginBottom: 20,
-            }}
-          >
-            <h3>{event.title}</h3>
-
-            <div>
-              <strong>Dato:</strong>{" "}
-              {event.startAt
-                ? event.startAt
-                    .toDate()
-                    .toLocaleString("da-DK")
-                : "Ikke angivet"}
-            </div>
-
-            <div>
-              <strong>Pladser:</strong>{" "}
-              {event.approvedCount} /{" "}
-              {event.maxApproved}
-            </div>
-
-            <div
-              style={{
-                marginTop: 8,
-                fontWeight: "bold",
-                color: full
-                  ? "crimson"
-                  : event.isOpen
-                  ? "green"
-                  : "#666",
-              }}
-            >
-              {full
-                ? "FULDT BOOKET"
-                : event.isOpen
-                ? "ÅBEN"
-                : "LUKKET"}
-            </div>
-
-            <div
-              style={{
-                marginTop: 12,
-              }}
-            >
-              <button
-                onClick={() =>
-                  toggleEvent(event)
-                }
+            return (
+              <div
+                key={event.id}
                 style={{
-                  padding: "9px 15px",
-                  marginRight: 8,
+                  border:
+                    "1px solid #ddd",
+                  padding: 15,
+                  marginBottom: 10,
+                  borderRadius: 8,
                 }}
               >
-                {event.isOpen
-                  ? "Luk event"
-                  : "Åbn event"}
-              </button>
+                <strong>
+                  {event.title}
+                </strong>
 
-              <button
-                onClick={() =>
-                  deleteEvent(event)
-                }
-                style={{
-                  padding: "9px 15px",
-                  background: "#d32f2f",
-                  color: "white",
-                  border: "none",
-                  borderRadius: 4,
-                  cursor: "pointer",
-                }}
-              >
-                Slet event
-              </button>
-            </div>
+                {event.startAt && (
+                  <div>
+                    {event.startAt
+                      .toDate()
+                      .toLocaleString(
+                        "da-DK"
+                      )}
+                  </div>
+                )}
 
-            <div
-              style={{
-                marginTop: 25,
-                borderTop: "1px solid #ddd",
-                paddingTop: 15,
-              }}
-            >
-              <h4>Tilmeldinger</h4>
-
-              <p>
-                <strong>Afventer:</strong>{" "}
-                {pending.length}
-                {" | "}
-                <strong>Godkendt:</strong>{" "}
-                {approved.length}
-                {" | "}
-                <strong>Afvist:</strong>{" "}
-                {rejected.length}
-              </p>
-
-              {pending.map((registration) => (
                 <div
-                  key={registration.id}
                   style={{
-                    background: "#fff8e1",
-                    border: "1px solid #ddd",
-                    borderRadius: 8,
-                    padding: 12,
-                    marginBottom: 8,
+                    marginTop: 8,
+                    fontWeight:
+                      "bold",
                   }}
                 >
-                  <strong>
-                    {registration.username}
-                  </strong>
+                  Pladser:{" "}
+                  {event.approvedCount} /{" "}
+                  {event.maxApproved}
+                </div>
 
-                  <div>
-                    Telefon:{" "}
-                    {registration.phone}
-                  </div>
-
+                {full && (
                   <div
                     style={{
-                      marginTop: 8,
+                      marginTop: 5,
+                      color:
+                        "crimson",
+                      fontWeight:
+                        "bold",
                     }}
                   >
-                    <button
-                      onClick={() =>
-                        approveRegistration(
-                          registration
-                        )
-                      }
-                      style={{
-                        padding:
-                          "8px 12px",
-                        marginRight: 8,
-                      }}
-                    >
-                      Godkend
-                    </button>
-
-                    <button
-                      onClick={() =>
-                        rejectRegistration(
-                          registration
-                        )
-                      }
-                      style={{
-                        padding:
-                          "8px 12px",
-                      }}
-                    >
-                      Afvis
-                    </button>
+                    FULDT BOOKET
                   </div>
-                </div>
-              ))}
-
-              {approved.length > 0 && (
-                <>
-                  <h4>Godkendte</h4>
-
-                  {approved.map(
-                    (registration) => (
-                      <div
-                        key={
-                          registration.id
-                        }
-                        style={{
-                          background:
-                            "#e8f5e9",
-                          padding: 10,
-                          marginBottom: 6,
-                          borderRadius: 6,
-                        }}
-                      >
-                        <strong>
-                          {
-                            registration.username
-                          }
-                        </strong>
-                        {" – "}
-                        {
-                          registration.phone
-                        }
-                      </div>
-                    )
-                  )}
-                </>
-              )}
-
-              {pending.length === 0 &&
-                approved.length === 0 &&
-                rejected.length === 0 && (
-                  <p>
-                    Ingen tilmeldinger
-                    til dette event.
-                  </p>
                 )}
-            </div>
-          </div>
-        );
-      })}
+              </div>
+            );
+          })}
 
-      <section
-        style={{
-          border: "1px solid #ddd",
-          borderRadius: 10,
-          padding: 20,
-          marginTop: 40,
-        }}
-      >
-        <h2>Opret event</h2>
+          <h2>
+            Tilmeld dig
+          </h2>
 
-        <input
-          type="text"
-          placeholder="Eventnavn"
-          value={title}
-          onChange={(e) =>
-            setTitle(e.target.value)
-          }
-          style={{
-            width: "100%",
-            padding: 12,
-            marginBottom: 10,
-            boxSizing: "border-box",
-          }}
-        />
-
-        <input
-          type="datetime-local"
-          value={startAt}
-          onChange={(e) =>
-            setStartAt(e.target.value)
-          }
-          style={{
-            width: "100%",
-            padding: 12,
-            marginBottom: 10,
-            boxSizing: "border-box",
-          }}
-        />
-
-        <input
-          type="number"
-          min="1"
-          value={maxApproved}
-          onChange={(e) =>
-            setMaxApproved(
-              Number(e.target.value)
-            )
-          }
-          style={{
-            width: "100%",
-            padding: 12,
-            marginBottom: 10,
-            boxSizing: "border-box",
-          }}
-        />
-
-        <label>
-          <input
-            type="checkbox"
-            checked={isOpen}
+          <select
+            value={selectedEvent}
             onChange={(e) =>
-              setIsOpen(
-                e.target.checked
+              setSelectedEvent(
+                e.target.value
               )
             }
-          />{" "}
-          Åben for tilmelding
-        </label>
+            style={{
+              width: "100%",
+              padding: 10,
+              marginBottom: 10,
+            }}
+          >
+            {events.map((event) => {
+              const full =
+                event.maxApproved > 0 &&
+                event.approvedCount >=
+                  event.maxApproved;
 
-        <br />
-        <br />
+              return (
+                <option
+                  key={event.id}
+                  value={event.id}
+                  disabled={full}
+                >
+                  {event.title}
+                  {full
+                    ? " – FULDT BOOKET"
+                    : ""}
+                </option>
+              );
+            })}
+          </select>
 
-        <button
-          onClick={createEvent}
-          disabled={loading}
-          style={{
-            padding: "12px 20px",
-          }}
-        >
-          {loading
-            ? "Opretter..."
-            : "Opret event"}
-        </button>
-      </section>
+          <input
+            type="text"
+            placeholder="Brugernavn"
+            value={username}
+            onChange={(e) =>
+              setUsername(
+                e.target.value
+              )
+            }
+            style={{
+              width: "100%",
+              padding: 10,
+              marginBottom: 10,
+              boxSizing:
+                "border-box",
+            }}
+          />
+
+          <input
+            type="tel"
+            placeholder="Telefonnummer"
+            value={phone}
+            onChange={(e) =>
+              setPhone(
+                e.target.value
+              )
+            }
+            style={{
+              width: "100%",
+              padding: 10,
+              marginBottom: 10,
+              boxSizing:
+                "border-box",
+            }}
+          />
+
+          {(() => {
+            const selected =
+              events.find(
+                (event) =>
+                  event.id ===
+                  selectedEvent
+              );
+
+            const full =
+              selected &&
+              selected.maxApproved >
+                0 &&
+              selected.approvedCount >=
+                selected.maxApproved;
+
+            return (
+              <button
+                onClick={
+                  submitRegistration
+                }
+                disabled={
+                  Boolean(full) ||
+                  sending
+                }
+                style={{
+                  padding:
+                    "10px 20px",
+                  cursor:
+                    full ||
+                    sending
+                      ? "not-allowed"
+                      : "pointer",
+                  opacity:
+                    full ||
+                    sending
+                      ? 0.5
+                      : 1,
+                }}
+              >
+                {sending
+                  ? "Sender..."
+                  : full
+                  ? "Fuldt booket"
+                  : "Send tilmelding"}
+              </button>
+            );
+          })()}
+        </>
+      )}
     </main>
   );
 }
