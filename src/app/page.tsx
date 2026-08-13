@@ -10,7 +10,6 @@ import {
   Timestamp,
   query,
   where,
-  deleteDoc,
 } from "firebase/firestore";
 
 import {
@@ -46,28 +45,18 @@ type Registration = {
   eventTitle: string;
   username: string;
   phone: string;
-  status:
-    | "pending"
-    | "approved"
-    | "rejected";
+  status: "pending" | "approved" | "rejected";
 };
 
 function normalizePhone(phone: string) {
-  const value = phone.trim();
+  const digits = phone.replace(/\D/g, "");
 
-  if (value.startsWith("+45")) {
-    return value
-      .replace(/\s/g, "")
-      .substring(3);
+  if (digits.startsWith("45") && digits.length === 10) {
+    return digits.substring(2);
   }
 
-  const digits = value.replace(/\D/g, "");
-
-  if (
-    digits.length === 10 &&
-    digits.startsWith("45")
-  ) {
-    return digits.substring(2);
+  if (digits.length === 8) {
+    return digits;
   }
 
   return digits;
@@ -84,57 +73,40 @@ function toFirebasePhone(phone: string) {
 }
 
 export default function HomePage() {
-  const [events, setEvents] =
-    useState<Event[]>([]);
+  const [events, setEvents] = useState<Event[]>([]);
+  const [selectedEvent, setSelectedEvent] = useState("");
 
-  const [selectedEvent, setSelectedEvent] =
-    useState("");
+  const [username, setUsername] = useState("");
+  const [phone, setPhone] = useState("");
 
-  const [username, setUsername] =
-    useState("");
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
 
-  const [phone, setPhone] =
-    useState("");
+  const [sending, setSending] = useState(false);
 
-  const [message, setMessage] =
-    useState("");
+  const [showLogin, setShowLogin] = useState(false);
+  const [loggedIn, setLoggedIn] = useState(false);
 
-  const [error, setError] =
-    useState("");
+  const [loginPhone, setLoginPhone] = useState("");
+  const [verificationCode, setVerificationCode] = useState("");
+  const [codeSent, setCodeSent] = useState(false);
+  const [loggingIn, setLoggingIn] = useState(false);
 
-  const [sending, setSending] =
-    useState(false);
+  const [myRegistrations, setMyRegistrations] = useState<
+    Registration[]
+  >([]);
 
-  const [showLogin, setShowLogin] =
-    useState(false);
+  const confirmationResult = useRef<ConfirmationResult | null>(
+    null
+  );
 
-  const [loggedIn, setLoggedIn] =
-    useState(false);
+  const recaptchaVerifier = useRef<RecaptchaVerifier | null>(
+    null
+  );
 
-  const [loginPhone, setLoginPhone] =
-    useState("");
-
-  const [verificationCode, setVerificationCode] =
-    useState("");
-
-  const [codeSent, setCodeSent] =
-    useState(false);
-
-  const [loggingIn, setLoggingIn] =
-    useState(false);
-
-  const [myRegistrations, setMyRegistrations] =
-    useState<Registration[]>([]);
-
-  const confirmationResult =
-    useRef<ConfirmationResult | null>(
-      null
-    );
-
-  const recaptchaVerifier =
-    useRef<RecaptchaVerifier | null>(
-      null
-    );
+  const registrationsInterval = useRef<
+    ReturnType<typeof setInterval> | null
+  >(null);
 
   const loadEvents = async () => {
     try {
@@ -142,165 +114,151 @@ export default function HomePage() {
         collection(db, "events")
       );
 
-      const parsed: Event[] =
-        snap.docs
-          .map((eventDoc) => {
-            const d =
-              eventDoc.data() as EventDoc;
+      const parsed: Event[] = snap.docs
+        .map((eventDoc) => {
+          const d = eventDoc.data() as EventDoc;
 
-            return {
-              id: eventDoc.id,
-              title:
-                d.title ??
-                "Uden titel",
-              isOpen:
-                Boolean(d.isOpen),
-              startAt:
-                d.startAt,
-              maxApproved:
-                Number(
-                  d.maxApproved ??
-                    0
-                ),
-              approvedCount:
-                Number(
-                  d.approvedCount ??
-                    0
-                ),
-            };
-          })
-          .sort((a, b) => {
-            const aTime =
-              a.startAt?.toMillis() ??
-              0;
+          return {
+            id: eventDoc.id,
+            title: d.title ?? "Uden titel",
+            isOpen: Boolean(d.isOpen),
+            startAt: d.startAt,
+            maxApproved: Number(d.maxApproved ?? 0),
+            approvedCount: Number(d.approvedCount ?? 0),
+          };
+        })
+        .sort((a, b) => {
+          const aTime = a.startAt?.toMillis() ?? 0;
+          const bTime = b.startAt?.toMillis() ?? 0;
 
-            const bTime =
-              b.startAt?.toMillis() ??
-              0;
+          return aTime - bTime;
+        });
 
-            return (
-              aTime - bTime
-            );
-          });
-
-      const openEvents =
-        parsed.filter(
-          (event) =>
-            event.isOpen
-        );
+      const openEvents = parsed.filter(
+        (event) => event.isOpen
+      );
 
       setEvents(openEvents);
 
       if (
-        openEvents.length >
-          0 &&
+        openEvents.length > 0 &&
         !openEvents.some(
-          (event) =>
-            event.id ===
-            selectedEvent
+          (event) => event.id === selectedEvent
         )
       ) {
-        setSelectedEvent(
-          openEvents[0].id
-        );
+        setSelectedEvent(openEvents[0].id);
       }
 
-      if (
-        openEvents.length ===
-        0
-      ) {
+      if (openEvents.length === 0) {
         setSelectedEvent("");
       }
     } catch (e: any) {
       setError(
-        e?.message ??
-          "Kunne ikke hente events."
+        e?.message ?? "Kunne ikke hente events."
       );
     }
   };
 
-  const loadMyRegistrations =
-    async () => {
-      const user =
-        auth.currentUser;
+  const loadMyRegistrations = async () => {
+    const user = auth.currentUser;
 
-      if (!user?.phoneNumber) {
+    if (!user?.phoneNumber) {
+      setMyRegistrations([]);
+      return;
+    }
+
+    try {
+      const localPhone = normalizePhone(
+        user.phoneNumber
+      );
+
+      if (localPhone.length !== 8) {
         setMyRegistrations([]);
         return;
       }
 
-      try {
-        const localPhone =
-          normalizePhone(
-            user.phoneNumber
-          );
+      const internationalPhone =
+        `+45${localPhone}`;
 
-        if (
-          localPhone.length !==
-          8
-        ) {
-          setMyRegistrations([]);
-          return;
-        }
+      const localQuery = query(
+        collection(db, "registrations"),
+        where("phone", "==", localPhone)
+      );
 
-        const registrationsQuery =
-          query(
-            collection(
-              db,
-              "registrations"
-            ),
-            where(
-              "phone",
-              "==",
-              localPhone
-            )
-          );
+      const internationalQuery = query(
+        collection(db, "registrations"),
+        where("phone", "==", internationalPhone)
+      );
 
-        const snap =
-          await getDocs(
-            registrationsQuery
-          );
+      const [localSnap, internationalSnap] =
+        await Promise.all([
+          getDocs(localQuery),
+          getDocs(internationalQuery),
+        ]);
 
-        const data: Registration[] =
-          snap.docs.map(
-            (registrationDoc) => {
-              const d =
-                registrationDoc.data();
+      const registrationMap =
+        new Map<string, Registration>();
 
-              return {
-                id:
-                  registrationDoc.id,
-                eventId:
-                  d.eventId ?? "",
-                eventTitle:
-                  d.eventTitle ??
-                  "Uden titel",
-                username:
-                  d.username ?? "",
-                phone:
-                  d.phone ?? "",
-                status:
-                  d.status ??
-                  "pending",
-              };
+      localSnap.docs.forEach((registrationDoc) => {
+        const d = registrationDoc.data();
+
+        registrationMap.set(
+          registrationDoc.id,
+          {
+            id: registrationDoc.id,
+            eventId: d.eventId ?? "",
+            eventTitle:
+              d.eventTitle ?? "Uden titel",
+            username: d.username ?? "",
+            phone: d.phone ?? "",
+            status:
+              d.status ?? "pending",
+          }
+        );
+      });
+
+      internationalSnap.docs.forEach(
+        (registrationDoc) => {
+          const d = registrationDoc.data();
+
+          registrationMap.set(
+            registrationDoc.id,
+            {
+              id: registrationDoc.id,
+              eventId: d.eventId ?? "",
+              eventTitle:
+                d.eventTitle ?? "Uden titel",
+              username: d.username ?? "",
+              phone: d.phone ?? "",
+              status:
+                d.status ?? "pending",
             }
           );
+        }
+      );
 
-        setMyRegistrations(
-          data
-        );
-      } catch (e: any) {
-        setError(
-          e?.message ??
-            "Kunne ikke hente dine tilmeldinger."
-        );
-      }
-    };
+      setMyRegistrations(
+        Array.from(
+          registrationMap.values()
+        )
+      );
+    } catch (e: any) {
+      console.error(
+        "Fejl ved hentning af tilmeldinger:",
+        e
+      );
+
+      setError(
+        e?.message ??
+          "Kunne ikke hente dine tilmeldinger."
+      );
+    }
+  };
 
   useEffect(() => {
     loadEvents();
 
-    const interval =
+    const eventsInterval =
       setInterval(
         loadEvents,
         5000
@@ -312,22 +270,63 @@ export default function HomePage() {
         async (user) => {
           if (user) {
             setLoggedIn(true);
+
             await loadMyRegistrations();
+
+            if (
+              registrationsInterval.current
+            ) {
+              clearInterval(
+                registrationsInterval.current
+              );
+            }
+
+            registrationsInterval.current =
+              setInterval(
+                loadMyRegistrations,
+                5000
+              );
           } else {
             setLoggedIn(false);
             setMyRegistrations([]);
+
+            if (
+              registrationsInterval.current
+            ) {
+              clearInterval(
+                registrationsInterval.current
+              );
+
+              registrationsInterval.current =
+                null;
+            }
           }
         }
       );
 
     return () => {
-      clearInterval(interval);
+      clearInterval(eventsInterval);
+
       unsubscribe();
+
+      if (
+        registrationsInterval.current
+      ) {
+        clearInterval(
+          registrationsInterval.current
+        );
+
+        registrationsInterval.current =
+          null;
+      }
 
       if (
         recaptchaVerifier.current
       ) {
-        recaptchaVerifier.current.clear();
+        try {
+          recaptchaVerifier.current.clear();
+        } catch {}
+
         recaptchaVerifier.current =
           null;
       }
@@ -345,13 +344,17 @@ export default function HomePage() {
     setCodeSent(false);
     setVerificationCode("");
     setLoginPhone("");
+
     confirmationResult.current =
       null;
 
     if (
       recaptchaVerifier.current
     ) {
-      recaptchaVerifier.current.clear();
+      try {
+        recaptchaVerifier.current.clear();
+      } catch {}
+
       recaptchaVerifier.current =
         null;
     }
@@ -380,24 +383,31 @@ export default function HomePage() {
 
       try {
         if (
-          !recaptchaVerifier.current
+          recaptchaVerifier.current
         ) {
+          try {
+            recaptchaVerifier.current.clear();
+          } catch {}
+
           recaptchaVerifier.current =
-            new RecaptchaVerifier(
-              auth,
-              "recaptcha-container",
-              {
-                size: "normal",
-                callback: () => {},
-                "expired-callback":
-                  () => {
-                    setError(
-                      "Sikkerhedstjekket er udløbet. Prøv igen."
-                    );
-                  },
-              }
-            );
+            null;
         }
+
+        recaptchaVerifier.current =
+          new RecaptchaVerifier(
+            auth,
+            "recaptcha-container",
+            {
+              size: "normal",
+              callback: () => {},
+              "expired-callback":
+                () => {
+                  setError(
+                    "Sikkerhedstjekket er udløbet. Prøv igen."
+                  );
+                },
+            }
+          );
 
         const result =
           await signInWithPhoneNumber(
@@ -494,6 +504,8 @@ export default function HomePage() {
 
         await loadMyRegistrations();
       } catch (e: any) {
+        console.error(e);
+
         setError(
           "Koden er forkert eller udløbet. Prøv igen."
         );
@@ -508,6 +520,18 @@ export default function HomePage() {
 
       setLoggedIn(false);
       setMyRegistrations([]);
+
+      if (
+        registrationsInterval.current
+      ) {
+        clearInterval(
+          registrationsInterval.current
+        );
+
+        registrationsInterval.current =
+          null;
+      }
+
       setMessage(
         "Du er logget ud."
       );
@@ -574,9 +598,7 @@ export default function HomePage() {
 
         await runTransaction(
           db,
-          async (
-            transaction
-          ) => {
+          async (transaction) => {
             const eventSnap =
               await transaction.get(
                 eventRef
@@ -636,15 +658,20 @@ export default function HomePage() {
               {
                 eventId:
                   selectedEvent,
+
                 eventTitle:
                   eventData.title ??
                   "Uden titel",
+
                 username:
                   username.trim(),
+
                 phone:
                   localPhone,
+
                 status:
                   "pending",
+
                 createdAt:
                   Timestamp.now(),
               }
@@ -660,6 +687,10 @@ export default function HomePage() {
         setPhone("");
 
         await loadEvents();
+
+        if (loggedIn) {
+          await loadMyRegistrations();
+        }
       } catch (e: any) {
         setError(
           e?.message ??
@@ -703,9 +734,7 @@ export default function HomePage() {
 
         await runTransaction(
           db,
-          async (
-            transaction
-          ) => {
+          async (transaction) => {
             const registrationSnap =
               await transaction.get(
                 registrationRef
@@ -820,7 +849,9 @@ export default function HomePage() {
           </button>
         ) : (
           <button
-            onClick={logout}
+            onClick={
+              logout
+            }
             style={{
               padding:
                 "10px 15px",
@@ -893,8 +924,7 @@ export default function HomePage() {
                   e
                 ) =>
                   setLoginPhone(
-                    e.target
-                      .value
+                    e.target.value
                   )
                 }
                 style={{
@@ -968,12 +998,10 @@ export default function HomePage() {
                   e
                 ) =>
                   setVerificationCode(
-                    e.target
-                      .value
-                      .replace(
-                        /\D/g,
-                        ""
-                      )
+                    e.target.value.replace(
+                      /\D/g,
+                      ""
+                    )
                   )
                 }
                 style={{
@@ -1011,9 +1039,11 @@ export default function HomePage() {
                   setCodeSent(
                     false
                   );
+
                   setVerificationCode(
                     ""
                   );
+
                   confirmationResult.current =
                     null;
 
@@ -1059,8 +1089,7 @@ export default function HomePage() {
           {myRegistrations.length ===
           0 ? (
             <p>
-              Du har ingen
-              aktive
+              Du har ingen aktive
               tilmeldinger.
             </p>
           ) : (
@@ -1287,8 +1316,7 @@ export default function HomePage() {
             }
             onChange={(e) =>
               setUsername(
-                e.target
-                  .value
+                e.target.value
               )
             }
             style={{
@@ -1310,8 +1338,7 @@ export default function HomePage() {
             }
             onChange={(e) =>
               setPhone(
-                e.target
-                  .value
+                e.target.value
               )
             }
             style={{
