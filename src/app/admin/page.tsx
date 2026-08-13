@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+
 import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
@@ -10,12 +11,13 @@ import {
 import {
   addDoc,
   collection,
-  getDocs,
-  updateDoc,
+  deleteDoc,
   doc,
-  serverTimestamp,
+  getDocs,
   runTransaction,
+  serverTimestamp,
   Timestamp,
+  updateDoc,
 } from "firebase/firestore";
 
 import { auth, db } from "../../lib/firebase";
@@ -41,7 +43,6 @@ type Registration = {
 export default function AdminPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-
   const [loggedIn, setLoggedIn] = useState(false);
 
   const [events, setEvents] = useState<EventItem[]>([]);
@@ -50,9 +51,9 @@ export default function AdminPage() {
   >([]);
 
   const [title, setTitle] = useState("");
+  const [startAt, setStartAt] = useState("");
   const [maxApproved, setMaxApproved] = useState(10);
   const [isOpen, setIsOpen] = useState(true);
-  const [startAt, setStartAt] = useState("");
 
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
@@ -64,7 +65,6 @@ export default function AdminPage() {
       async (user) => {
         if (user) {
           setLoggedIn(true);
-
           await loadEvents();
           await loadRegistrations();
         } else {
@@ -78,7 +78,7 @@ export default function AdminPage() {
     return () => unsubscribe();
   }, []);
 
-  const login = async () => {
+  async function login() {
     setMsg("");
     setErr("");
 
@@ -95,29 +95,24 @@ export default function AdminPage() {
         e?.message ?? "Login mislykkedes."
       );
     }
-  };
+  }
 
-  const logout = async () => {
+  async function logout() {
     await signOut(auth);
+  }
 
-    setLoggedIn(false);
-    setEvents([]);
-    setRegistrations([]);
-    setMsg("Logget ud");
-  };
-
-  const loadEvents = async () => {
+  async function loadEvents() {
     try {
       const snap = await getDocs(
         collection(db, "events")
       );
 
       const data: EventItem[] = snap.docs
-        .map((eventDoc) => {
-          const d = eventDoc.data();
+        .map((item) => {
+          const d = item.data();
 
           return {
-            id: eventDoc.id,
+            id: item.id,
             title: d.title ?? "Uden titel",
             isOpen: Boolean(d.isOpen),
             startAt: d.startAt,
@@ -132,6 +127,7 @@ export default function AdminPage() {
         .sort((a, b) => {
           const aTime =
             a.startAt?.toMillis() ?? 0;
+
           const bTime =
             b.startAt?.toMillis() ?? 0;
 
@@ -145,26 +141,27 @@ export default function AdminPage() {
           "Kunne ikke hente events."
       );
     }
-  };
+  }
 
-  const loadRegistrations = async () => {
+  async function loadRegistrations() {
     try {
       const snap = await getDocs(
         collection(db, "registrations")
       );
 
       const data: Registration[] =
-        snap.docs.map((registrationDoc) => {
-          const d = registrationDoc.data();
+        snap.docs.map((item) => {
+          const d = item.data();
 
           return {
-            id: registrationDoc.id,
+            id: item.id,
             eventId: d.eventId ?? "",
             eventTitle:
-              d.eventTitle ?? "",
+              d.eventTitle ?? "Ukendt event",
             username:
               d.username ?? "",
-            phone: d.phone ?? "",
+            phone:
+              d.phone ?? "",
             status:
               d.status ?? "pending",
           };
@@ -177,9 +174,9 @@ export default function AdminPage() {
           "Kunne ikke hente tilmeldinger."
       );
     }
-  };
+  }
 
-  const createEvent = async () => {
+  async function createEvent() {
     setMsg("");
     setErr("");
 
@@ -195,7 +192,7 @@ export default function AdminPage() {
       return;
     }
 
-    if (maxApproved < 1) {
+    if (Number(maxApproved) < 1) {
       setErr(
         "Antal pladser skal være mindst 1."
       );
@@ -209,20 +206,20 @@ export default function AdminPage() {
         collection(db, "events"),
         {
           title: title.trim(),
-          isOpen,
+          startAt: new Date(startAt),
           maxApproved:
             Number(maxApproved),
           approvedCount: 0,
-          startAt: new Date(startAt),
+          isOpen,
           createdAt:
             serverTimestamp(),
         }
       );
 
       setTitle("");
+      setStartAt("");
       setMaxApproved(10);
       setIsOpen(true);
-      setStartAt("");
 
       await loadEvents();
 
@@ -237,11 +234,11 @@ export default function AdminPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }
 
-  const toggleEvent = async (
+  async function toggleEvent(
     event: EventItem
-  ) => {
+  ) {
     try {
       await updateDoc(
         doc(db, "events", event.id),
@@ -263,14 +260,44 @@ export default function AdminPage() {
           "Eventets status kunne ikke ændres."
       );
     }
-  };
+  }
 
-  const approveRegistration = async (
+  async function deleteEvent(
+    event: EventItem
+  ) {
+    const confirmed =
+      window.confirm(
+        `Er du sikker på, at du vil slette "${event.title}"?\n\nEventet slettes permanent.`
+      );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setMsg("");
+      setErr("");
+
+      await deleteDoc(
+        doc(db, "events", event.id)
+      );
+
+      await loadEvents();
+
+      setMsg(
+        `"${event.title}" er slettet ✓`
+      );
+    } catch (e: any) {
+      setErr(
+        e?.message ??
+          "Eventet kunne ikke slettes."
+      );
+    }
+  }
+
+  async function approveRegistration(
     registration: Registration
-  ) => {
-    setMsg("");
-    setErr("");
-
+  ) {
     try {
       await runTransaction(
         db,
@@ -327,12 +354,14 @@ export default function AdminPage() {
 
           const approvedCount =
             Number(
-              eventData.approvedCount ?? 0
+              eventData.approvedCount ??
+                0
             );
 
           const maxApproved =
             Number(
-              eventData.maxApproved ?? 0
+              eventData.maxApproved ??
+                0
             );
 
           if (
@@ -341,7 +370,7 @@ export default function AdminPage() {
               maxApproved
           ) {
             throw new Error(
-              "Eventet er allerede fuldt booket."
+              "Eventet er fuldt booket."
             );
           }
 
@@ -374,11 +403,11 @@ export default function AdminPage() {
           "Tilmeldingen kunne ikke godkendes."
       );
     }
-  };
+  }
 
-  const rejectRegistration = async (
+  async function rejectRegistration(
     registration: Registration
-  ) => {
+  ) {
     try {
       await updateDoc(
         doc(
@@ -402,7 +431,7 @@ export default function AdminPage() {
           "Tilmeldingen kunne ikke afvises."
       );
     }
-  };
+  }
 
   if (!loggedIn) {
     return (
@@ -415,14 +444,19 @@ export default function AdminPage() {
             "system-ui",
         }}
       >
-        <h1>PAR SAUNAGUS</h1>
+        <h1>
+          PAR SAUNAGUS
+        </h1>
 
-        <h2>Admin login</h2>
+        <h2>
+          Admin login
+        </h2>
 
         {err && (
           <p
             style={{
-              color: "crimson",
+              color:
+                "crimson",
             }}
           >
             {err}
@@ -444,7 +478,9 @@ export default function AdminPage() {
           placeholder="Admin e-mail"
           value={email}
           onChange={(e) =>
-            setEmail(e.target.value)
+            setEmail(
+              e.target.value
+            )
           }
           style={{
             width: "100%",
@@ -460,7 +496,9 @@ export default function AdminPage() {
           placeholder="Adgangskode"
           value={password}
           onChange={(e) =>
-            setPassword(e.target.value)
+            setPassword(
+              e.target.value
+            )
           }
           style={{
             width: "100%",
@@ -476,7 +514,6 @@ export default function AdminPage() {
           style={{
             padding:
               "12px 20px",
-            cursor: "pointer",
           }}
         >
           Log ind
@@ -512,11 +549,6 @@ export default function AdminPage() {
 
         <button
           onClick={logout}
-          style={{
-            padding:
-              "10px 18px",
-            cursor: "pointer",
-          }}
         >
           Log ud
         </button>
@@ -552,95 +584,125 @@ export default function AdminPage() {
         </div>
       )}
 
-      <section
-        style={{
-          marginBottom: 40,
-        }}
-      >
-        <h2>
-          Events
-        </h2>
+      <h2>
+        Events
+      </h2>
 
-        {events.length === 0 ? (
-          <p>
-            Ingen events.
-          </p>
-        ) : (
-          events.map(
-            (event) => {
-              const full =
-                event.maxApproved >
-                  0 &&
-                event.approvedCount >=
-                  event.maxApproved;
+      {events.length === 0 ? (
+        <p>
+          Ingen events.
+        </p>
+      ) : (
+        events.map(
+          (event) => {
+            const eventRegistrations =
+              registrations.filter(
+                (r) =>
+                  r.eventId ===
+                  event.id
+              );
 
-              return (
-                <div
-                  key={event.id}
+            const pending =
+              eventRegistrations.filter(
+                (r) =>
+                  r.status ===
+                  "pending"
+              );
+
+            const approved =
+              eventRegistrations.filter(
+                (r) =>
+                  r.status ===
+                  "approved"
+              );
+
+            const rejected =
+              eventRegistrations.filter(
+                (r) =>
+                  r.status ===
+                  "rejected"
+              );
+
+            const full =
+              event.maxApproved >
+                0 &&
+              event.approvedCount >=
+                event.maxApproved;
+
+            return (
+              <div
+                key={event.id}
+                style={{
+                  border:
+                    "1px solid #ccc",
+                  borderRadius: 12,
+                  padding: 20,
+                  marginBottom: 20,
+                }}
+              >
+                <h3
                   style={{
-                    border:
-                      "1px solid #ddd",
-                    borderRadius:
-                      10,
-                    padding: 18,
-                    marginBottom:
-                      12,
+                    marginTop: 0,
                   }}
                 >
-                  <h3
-                    style={{
-                      marginTop: 0,
-                    }}
-                  >
-                    {event.title}
-                  </h3>
+                  {event.title}
+                </h3>
 
-                  <div>
-                    <strong>
-                      Dato:
-                    </strong>{" "}
-                    {event.startAt
-                      ? event.startAt
-                          .toDate()
-                          .toLocaleString(
-                            "da-DK"
-                          )
-                      : "Ikke angivet"}
-                  </div>
+                <div>
+                  <strong>
+                    Dato:
+                  </strong>{" "}
+                  {event.startAt
+                    ? event.startAt
+                        .toDate()
+                        .toLocaleString(
+                          "da-DK"
+                        )
+                    : "Ikke angivet"}
+                </div>
 
-                  <div>
-                    <strong>
-                      Pladser:
-                    </strong>{" "}
-                    {
-                      event.approvedCount
-                    }{" "}
-                    /{" "}
-                    {
-                      event.maxApproved
-                    }
-                  </div>
+                <div>
+                  <strong>
+                    Pladser:
+                  </strong>{" "}
+                  {
+                    event.approvedCount
+                  }{" "}
+                  /{" "}
+                  {
+                    event.maxApproved
+                  }
+                </div>
 
-                  <div
-                    style={{
-                      marginTop: 8,
-                      fontWeight:
-                        "bold",
-                      color:
-                        full
-                          ? "crimson"
-                          : event.isOpen
-                          ? "green"
-                          : "#666",
-                    }}
-                  >
-                    {full
-                      ? "FULDT BOOKET"
+                <div
+                  style={{
+                    marginTop: 8,
+                    fontWeight:
+                      "bold",
+                    color: full
+                      ? "crimson"
                       : event.isOpen
-                      ? "ÅBEN"
-                      : "LUKKET"}
-                  </div>
+                      ? "green"
+                      : "#666",
+                  }}
+                >
+                  {full
+                    ? "FULDT BOOKET"
+                    : event.isOpen
+                    ? "ÅBEN"
+                    : "LUKKET"}
+                </div>
 
+                <div
+                  style={{
+                    marginTop: 12,
+                    display:
+                      "flex",
+                    gap: 8,
+                    flexWrap:
+                      "wrap",
+                  }}
+                >
                   <button
                     onClick={() =>
                       toggleEvent(
@@ -648,7 +710,6 @@ export default function AdminPage() {
                       )
                     }
                     style={{
-                      marginTop: 12,
                       padding:
                         "9px 15px",
                       cursor:
@@ -659,12 +720,197 @@ export default function AdminPage() {
                       ? "Luk event"
                       : "Åbn event"}
                   </button>
+
+                  <button
+                    onClick={() =>
+                      deleteEvent(
+                        event
+                      )
+                    }
+                    style={{
+                      padding:
+                        "9px 15px",
+                      background:
+                        "#d32f2f",
+                      color:
+                        "white",
+                      border:
+                        "none",
+                      borderRadius: 4,
+                      cursor:
+                        "pointer",
+                    }}
+                  >
+                    Slet event
+                  </button>
                 </div>
-              );
-            }
-          )
-        )}
-      </section>
+
+                <div
+                  style={{
+                    marginTop: 25,
+                    borderTop:
+                      "1px solid #ddd",
+                    paddingTop: 15,
+                  }}
+                >
+                  <h4>
+                    Tilmeldinger
+                  </h4>
+
+                  <p>
+                    <strong>
+                      Afventer:
+                    </strong>{" "}
+                    {
+                      pending.length
+                    }
+                    {" | "}
+                    <strong>
+                      Godkendt:
+                    </strong>{" "}
+                    {
+                      approved.length
+                    }
+                    {" | "}
+                    <strong>
+                      Afvist:
+                    </strong>{" "}
+                    {
+                      rejected.length
+                    }
+                  </p>
+
+                  {pending.map(
+                    (
+                      registration
+                    ) => (
+                      <div
+                        key={
+                          registration.id
+                        }
+                        style={{
+                          background:
+                            "#fff8e1",
+                          border:
+                            "1px solid #ddd",
+                          borderRadius:
+                            8,
+                          padding:
+                            12,
+                          marginBottom:
+                            8,
+                        }}
+                      >
+                        <strong>
+                          {
+                            registration.username
+                          }
+                        </strong>
+
+                        <div>
+                          Telefon:{" "}
+                          {
+                            registration.phone
+                          }
+                        </div>
+
+                        <div
+                          style={{
+                            marginTop: 8,
+                          }}
+                        >
+                          <button
+                            onClick={() =>
+                              approveRegistration(
+                                registration
+                              )
+                            }
+                            style={{
+                              padding:
+                                "8px 12px",
+                              marginRight:
+                                8,
+                            }}
+                          >
+                            Godkend
+                          </button>
+
+                          <button
+                            onClick={() =>
+                              rejectRegistration(
+                                registration
+                              )
+                            }
+                            style={{
+                              padding:
+                                "8px 12px",
+                            }}
+                          >
+                            Afvis
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  )}
+
+                  {approved.length >
+                    0 && (
+                    <>
+                      <h4>
+                        Godkendte
+                      </h4>
+
+                      {approved.map(
+                        (
+                          registration
+                        ) => (
+                          <div
+                            key={
+                              registration.id
+                            }
+                            style={{
+                              background:
+                                "#e8f5e9",
+                              padding:
+                                10,
+                              marginBottom:
+                                6,
+                              borderRadius:
+                                6,
+                            }}
+                          >
+                            <strong>
+                              {
+                                registration.username
+                              }
+                            </strong>
+                            {" – "}
+                            {
+                              registration.phone
+                            }
+                          </div>
+                        )
+                      )}
+                    </>
+                  )}
+
+                  {pending.length ===
+                    0 &&
+                    approved.length ===
+                      0 &&
+                    rejected.length ===
+                      0 && (
+                      <p>
+                        Ingen tilmeldinger
+                        til dette event.
+                      </p>
+                    )}
+                </div>
+              </div>
+            );
+          }
+        )
+      )}
 
       <section
         style={{
@@ -672,7 +918,7 @@ export default function AdminPage() {
             "1px solid #ddd",
           borderRadius: 10,
           padding: 20,
-          marginBottom: 40,
+          marginTop: 40,
         }}
       >
         <h2>
@@ -751,7 +997,9 @@ export default function AdminPage() {
         <br />
 
         <button
-          onClick={createEvent}
+          onClick={
+            createEvent
+          }
           disabled={loading}
           style={{
             padding:
@@ -766,114 +1014,6 @@ export default function AdminPage() {
             ? "Opretter..."
             : "Opret event"}
         </button>
-      </section>
-
-      <section>
-        <h2>
-          Tilmeldinger
-        </h2>
-
-        {registrations.length ===
-        0 ? (
-          <p>
-            Ingen tilmeldinger.
-          </p>
-        ) : (
-          registrations.map(
-            (registration) => (
-              <div
-                key={
-                  registration.id
-                }
-                style={{
-                  border:
-                    "1px solid #ddd",
-                  borderRadius:
-                    10,
-                  padding: 15,
-                  marginBottom:
-                    10,
-                }}
-              >
-                <h3>
-                  {
-                    registration.username
-                  }
-                </h3>
-
-                <div>
-                  <strong>
-                    Event:
-                  </strong>{" "}
-                  {
-                    registration.eventTitle
-                  }
-                </div>
-
-                <div>
-                  <strong>
-                    Telefon:
-                  </strong>{" "}
-                  {
-                    registration.phone
-                  }
-                </div>
-
-                <div>
-                  <strong>
-                    Status:
-                  </strong>{" "}
-                  {
-                    registration.status
-                  }
-                </div>
-
-                {registration.status ===
-                  "pending" && (
-                  <div
-                    style={{
-                      marginTop: 15,
-                    }}
-                  >
-                    <button
-                      onClick={() =>
-                        approveRegistration(
-                          registration
-                        )
-                      }
-                      style={{
-                        padding:
-                          "10px 15px",
-                        marginRight:
-                          10,
-                        cursor:
-                          "pointer",
-                      }}
-                    >
-                      Godkend
-                    </button>
-
-                    <button
-                      onClick={() =>
-                        rejectRegistration(
-                          registration
-                        )
-                      }
-                      style={{
-                        padding:
-                          "10px 15px",
-                        cursor:
-                          "pointer",
-                      }}
-                    >
-                      Afvis
-                    </button>
-                  </div>
-                )}
-              </div>
-            )
-          )
-        )}
       </section>
     </main>
   );
