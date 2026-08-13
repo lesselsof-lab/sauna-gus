@@ -55,21 +55,17 @@ function normalizePhone(phone: string) {
     return digits.substring(2);
   }
 
-  if (digits.length === 8) {
-    return digits;
-  }
-
   return digits;
 }
 
 function toFirebasePhone(phone: string) {
-  const local = normalizePhone(phone);
+  const localPhone = normalizePhone(phone);
 
-  if (local.length !== 8) {
+  if (localPhone.length !== 8) {
     return "";
   }
 
-  return `+45${local}`;
+  return `+45${localPhone}`;
 }
 
 export default function HomePage() {
@@ -96,17 +92,14 @@ export default function HomePage() {
     Registration[]
   >([]);
 
-  const confirmationResult = useRef<ConfirmationResult | null>(
-    null
-  );
+  const confirmationResult =
+    useRef<ConfirmationResult | null>(null);
 
-  const recaptchaVerifier = useRef<RecaptchaVerifier | null>(
-    null
-  );
+  const recaptchaVerifier =
+    useRef<RecaptchaVerifier | null>(null);
 
-  const registrationsInterval = useRef<
-    ReturnType<typeof setInterval> | null
-  >(null);
+  const registrationsInterval =
+    useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadEvents = async () => {
     try {
@@ -168,43 +161,23 @@ export default function HomePage() {
     }
 
     try {
-      const localPhone = normalizePhone(
-        user.phoneNumber
-      );
+      // Firebase Phone Auth bruger +45XXXXXXXX
+      const firebasePhone = user.phoneNumber;
 
-      if (localPhone.length !== 8) {
-        setMyRegistrations([]);
-        return;
-      }
-
-      const internationalPhone =
-        `+45${localPhone}`;
-
-      const localQuery = query(
+      const registrationsQuery = query(
         collection(db, "registrations"),
-        where("phone", "==", localPhone)
+        where("phone", "==", firebasePhone)
       );
 
-      const internationalQuery = query(
-        collection(db, "registrations"),
-        where("phone", "==", internationalPhone)
+      const snap = await getDocs(
+        registrationsQuery
       );
 
-      const [localSnap, internationalSnap] =
-        await Promise.all([
-          getDocs(localQuery),
-          getDocs(internationalQuery),
-        ]);
+      const data: Registration[] =
+        snap.docs.map((registrationDoc) => {
+          const d = registrationDoc.data();
 
-      const registrationMap =
-        new Map<string, Registration>();
-
-      localSnap.docs.forEach((registrationDoc) => {
-        const d = registrationDoc.data();
-
-        registrationMap.set(
-          registrationDoc.id,
-          {
+          return {
             id: registrationDoc.id,
             eventId: d.eventId ?? "",
             eventTitle:
@@ -213,38 +186,13 @@ export default function HomePage() {
             phone: d.phone ?? "",
             status:
               d.status ?? "pending",
-          }
-        );
-      });
+          };
+        });
 
-      internationalSnap.docs.forEach(
-        (registrationDoc) => {
-          const d = registrationDoc.data();
-
-          registrationMap.set(
-            registrationDoc.id,
-            {
-              id: registrationDoc.id,
-              eventId: d.eventId ?? "",
-              eventTitle:
-                d.eventTitle ?? "Uden titel",
-              username: d.username ?? "",
-              phone: d.phone ?? "",
-              status:
-                d.status ?? "pending",
-            }
-          );
-        }
-      );
-
-      setMyRegistrations(
-        Array.from(
-          registrationMap.values()
-        )
-      );
+      setMyRegistrations(data);
     } catch (e: any) {
       console.error(
-        "Fejl ved hentning af tilmeldinger:",
+        "Fejl ved hentning af mine tilmeldinger:",
         e
       );
 
@@ -259,10 +207,7 @@ export default function HomePage() {
     loadEvents();
 
     const eventsInterval =
-      setInterval(
-        loadEvents,
-        5000
-      );
+      setInterval(loadEvents, 5000);
 
     const unsubscribe =
       onAuthStateChanged(
@@ -306,7 +251,6 @@ export default function HomePage() {
 
     return () => {
       clearInterval(eventsInterval);
-
       unsubscribe();
 
       if (
@@ -360,159 +304,152 @@ export default function HomePage() {
     }
   };
 
-  const sendLoginCode =
-    async () => {
-      if (loggingIn) return;
+  const sendLoginCode = async () => {
+    if (loggingIn) return;
 
-      setMessage("");
-      setError("");
+    setMessage("");
+    setError("");
 
-      const firebasePhone =
-        toFirebasePhone(
-          loginPhone
-        );
+    const firebasePhone =
+      toFirebasePhone(loginPhone);
 
-      if (!firebasePhone) {
-        setError(
-          "Indtast et gyldigt dansk telefonnummer på 8 cifre."
-        );
-        return;
-      }
+    if (!firebasePhone) {
+      setError(
+        "Indtast et gyldigt dansk telefonnummer på 8 cifre."
+      );
+      return;
+    }
 
-      setLoggingIn(true);
+    setLoggingIn(true);
 
-      try {
-        if (
-          recaptchaVerifier.current
-        ) {
-          try {
-            recaptchaVerifier.current.clear();
-          } catch {}
-
-          recaptchaVerifier.current =
-            null;
-        }
+    try {
+      if (
+        recaptchaVerifier.current
+      ) {
+        try {
+          recaptchaVerifier.current.clear();
+        } catch {}
 
         recaptchaVerifier.current =
-          new RecaptchaVerifier(
-            auth,
-            "recaptcha-container",
-            {
-              size: "normal",
-              callback: () => {},
-              "expired-callback":
-                () => {
-                  setError(
-                    "Sikkerhedstjekket er udløbet. Prøv igen."
-                  );
-                },
-            }
-          );
-
-        const result =
-          await signInWithPhoneNumber(
-            auth,
-            firebasePhone,
-            recaptchaVerifier.current
-          );
-
-        confirmationResult.current =
-          result;
-
-        setCodeSent(true);
-
-        setMessage(
-          "SMS-koden er sendt til dit telefonnummer."
-        );
-      } catch (e: any) {
-        console.error(e);
-
-        if (
-          recaptchaVerifier.current
-        ) {
-          try {
-            recaptchaVerifier.current.clear();
-          } catch {}
-
-          recaptchaVerifier.current =
-            null;
-        }
-
-        setError(
-          e?.message ??
-            "SMS-koden kunne ikke sendes."
-        );
-      } finally {
-        setLoggingIn(false);
-      }
-    };
-
-  const confirmLogin =
-    async () => {
-      if (loggingIn) return;
-
-      setMessage("");
-      setError("");
-
-      if (
-        !confirmationResult.current
-      ) {
-        setError(
-          "Send først en SMS-kode."
-        );
-        return;
-      }
-
-      if (
-        !verificationCode.trim()
-      ) {
-        setError(
-          "Indtast koden fra SMS'en."
-        );
-        return;
-      }
-
-      setLoggingIn(true);
-
-      try {
-        await confirmationResult.current.confirm(
-          verificationCode.trim()
-        );
-
-        setLoggedIn(true);
-        setShowLogin(false);
-        setCodeSent(false);
-        setVerificationCode("");
-
-        confirmationResult.current =
           null;
-
-        if (
-          recaptchaVerifier.current
-        ) {
-          try {
-            recaptchaVerifier.current.clear();
-          } catch {}
-
-          recaptchaVerifier.current =
-            null;
-        }
-
-        setMessage(
-          "Du er nu logget ind."
-        );
-
-        await loadMyRegistrations();
-      } catch (e: any) {
-        console.error(e);
-
-        setError(
-          "Koden er forkert eller udløbet. Prøv igen."
-        );
-      } finally {
-        setLoggingIn(false);
       }
-    };
+
+      recaptchaVerifier.current =
+        new RecaptchaVerifier(
+          auth,
+          "recaptcha-container",
+          {
+            size: "normal",
+            callback: () => {},
+            "expired-callback": () => {
+              setError(
+                "Sikkerhedstjekket er udløbet. Prøv igen."
+              );
+            },
+          }
+        );
+
+      const result =
+        await signInWithPhoneNumber(
+          auth,
+          firebasePhone,
+          recaptchaVerifier.current
+        );
+
+      confirmationResult.current =
+        result;
+
+      setCodeSent(true);
+
+      setMessage(
+        "SMS-koden er sendt til dit telefonnummer."
+      );
+    } catch (e: any) {
+      console.error(e);
+
+      if (
+        recaptchaVerifier.current
+      ) {
+        try {
+          recaptchaVerifier.current.clear();
+        } catch {}
+
+        recaptchaVerifier.current =
+          null;
+      }
+
+      setError(
+        e?.message ??
+          "SMS-koden kunne ikke sendes."
+      );
+    } finally {
+      setLoggingIn(false);
+    }
+  };
+
+  const confirmLogin = async () => {
+    if (loggingIn) return;
+
+    setMessage("");
+    setError("");
+
+    if (
+      !confirmationResult.current
+    ) {
+      setError(
+        "Send først en SMS-kode."
+      );
+      return;
+    }
+
+    if (!verificationCode.trim()) {
+      setError(
+        "Indtast koden fra SMS'en."
+      );
+      return;
+    }
+
+    setLoggingIn(true);
+
+    try {
+      await confirmationResult.current.confirm(
+        verificationCode.trim()
+      );
+
+      setLoggedIn(true);
+      setShowLogin(false);
+      setCodeSent(false);
+      setVerificationCode("");
+
+      confirmationResult.current =
+        null;
+
+      if (
+        recaptchaVerifier.current
+      ) {
+        try {
+          recaptchaVerifier.current.clear();
+        } catch {}
+
+        recaptchaVerifier.current =
+          null;
+      }
+
+      setMessage(
+        "Du er nu logget ind."
+      );
+
+      await loadMyRegistrations();
+    } catch (e: any) {
+      console.error(e);
+
+      setError(
+        "Koden er forkert eller udløbet. Prøv igen."
+      );
+    } finally {
+      setLoggingIn(false);
+    }
+  };
 
   const logout = async () => {
     try {
@@ -575,12 +512,12 @@ export default function HomePage() {
         return;
       }
 
-      const localPhone =
-        normalizePhone(phone);
+      // Gem ALTID telefonnummeret i samme format
+      // som Firebase Phone Authentication.
+      const firebasePhone =
+        toFirebasePhone(phone);
 
-      if (
-        localPhone.length !== 8
-      ) {
+      if (!firebasePhone) {
         setError(
           "Indtast et gyldigt dansk telefonnummer på 8 cifre."
         );
@@ -666,8 +603,10 @@ export default function HomePage() {
                 username:
                   username.trim(),
 
+                // VIGTIGT:
+                // +4520123460
                 phone:
-                  localPhone,
+                  firebasePhone,
 
                 status:
                   "pending",
@@ -1089,7 +1028,8 @@ export default function HomePage() {
           {myRegistrations.length ===
           0 ? (
             <p>
-              Du har ingen aktive
+              Du har ingen
+              aktive
               tilmeldinger.
             </p>
           ) : (
