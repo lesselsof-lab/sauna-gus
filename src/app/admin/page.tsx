@@ -47,9 +47,8 @@ export default function AdminPage() {
   const [loggedIn, setLoggedIn] = useState(false);
 
   const [events, setEvents] = useState<EventItem[]>([]);
-  const [registrations, setRegistrations] = useState<
-    Registration[]
-  >([]);
+  const [registrations, setRegistrations] =
+    useState<Registration[]>([]);
 
   const [title, setTitle] = useState("");
   const [startAt, setStartAt] = useState("");
@@ -168,10 +167,8 @@ export default function AdminPage() {
             eventId: d.eventId ?? "",
             eventTitle:
               d.eventTitle ?? "Ukendt event",
-            username:
-              d.username ?? "",
-            phone:
-              d.phone ?? "",
+            username: d.username ?? "",
+            phone: d.phone ?? "",
             status:
               d.status ?? "pending",
           };
@@ -215,7 +212,6 @@ export default function AdminPage() {
 
   function startEditing(event: EventItem) {
     setEditingEventId(event.id);
-
     setEditTitle(event.title);
 
     setEditStartAt(
@@ -283,17 +279,11 @@ export default function AdminPage() {
       await updateDoc(
         doc(db, "events", event.id),
         {
-          title:
-            editTitle.trim(),
-
-          startAt:
-            new Date(editStartAt),
-
+          title: editTitle.trim(),
+          startAt: new Date(editStartAt),
           maxApproved:
             Number(editMaxApproved),
-
-          isOpen:
-            editIsOpen,
+          isOpen: editIsOpen,
         }
       );
 
@@ -301,9 +291,7 @@ export default function AdminPage() {
 
       await loadEvents();
 
-      setMsg(
-        "Event opdateret ✓"
-      );
+      setMsg("Event opdateret ✓");
     } catch (e: any) {
       setErr(
         e?.message ??
@@ -343,19 +331,12 @@ export default function AdminPage() {
       await addDoc(
         collection(db, "events"),
         {
-          title:
-            title.trim(),
-
-          startAt:
-            new Date(startAt),
-
+          title: title.trim(),
+          startAt: new Date(startAt),
           maxApproved:
             Number(maxApproved),
-
           approvedCount: 0,
-
           isOpen,
-
           createdAt:
             serverTimestamp(),
         }
@@ -368,9 +349,7 @@ export default function AdminPage() {
 
       await loadEvents();
 
-      setMsg(
-        "Event oprettet ✓"
-      );
+      setMsg("Event oprettet ✓");
     } catch (e: any) {
       setErr(
         e?.message ??
@@ -388,8 +367,7 @@ export default function AdminPage() {
       await updateDoc(
         doc(db, "events", event.id),
         {
-          isOpen:
-            !event.isOpen,
+          isOpen: !event.isOpen,
         }
       );
 
@@ -416,9 +394,7 @@ export default function AdminPage() {
         `Er du sikker på, at du vil slette "${event.title}"?\n\nEventet OG alle tilmeldinger til eventet slettes permanent.`
       );
 
-    if (!confirmed) {
-      return;
-    }
+    if (!confirmed) return;
 
     try {
       setMsg("");
@@ -426,10 +402,7 @@ export default function AdminPage() {
 
       const registrationSnap =
         await getDocs(
-          collection(
-            db,
-            "registrations"
-          )
+          collection(db, "registrations")
         );
 
       const batch = writeBatch(db);
@@ -455,11 +428,7 @@ export default function AdminPage() {
       );
 
       batch.delete(
-        doc(
-          db,
-          "events",
-          event.id
-        )
+        doc(db, "events", event.id)
       );
 
       await batch.commit();
@@ -492,12 +461,11 @@ export default function AdminPage() {
               registration.id
             );
 
-          const eventRef =
-            doc(
-              db,
-              "events",
-              registration.eventId
-            );
+          const eventRef = doc(
+            db,
+            "events",
+            registration.eventId
+          );
 
           const registrationSnap =
             await transaction.get(
@@ -561,8 +529,7 @@ export default function AdminPage() {
           transaction.update(
             registrationRef,
             {
-              status:
-                "approved",
+              status: "approved",
             }
           );
 
@@ -570,8 +537,7 @@ export default function AdminPage() {
             eventRef,
             {
               approvedCount:
-                approvedCount +
-                1,
+                approvedCount + 1,
             }
           );
         }
@@ -602,8 +568,7 @@ export default function AdminPage() {
           registration.id
         ),
         {
-          status:
-            "rejected",
+          status: "rejected",
         }
       );
 
@@ -620,15 +585,134 @@ export default function AdminPage() {
     }
   }
 
+  async function deleteRegistration(
+    registration: Registration
+  ) {
+    const isApproved =
+      registration.status ===
+      "approved";
+
+    const confirmed =
+      window.confirm(
+        isApproved
+          ? `Slet tilmeldingen fra "${registration.username}"?\n\nTilmeldingen er godkendt, så pladsen bliver frigivet igen.`
+          : `Slet tilmeldingen fra "${registration.username}"?`
+      );
+
+    if (!confirmed) return;
+
+    try {
+      setMsg("");
+      setErr("");
+
+      if (isApproved) {
+        await runTransaction(
+          db,
+          async (transaction) => {
+            const registrationRef =
+              doc(
+                db,
+                "registrations",
+                registration.id
+              );
+
+            const eventRef = doc(
+              db,
+              "events",
+              registration.eventId
+            );
+
+            const registrationSnap =
+              await transaction.get(
+                registrationRef
+              );
+
+            const eventSnap =
+              await transaction.get(
+                eventRef
+              );
+
+            if (
+              !registrationSnap.exists()
+            ) {
+              throw new Error(
+                "Tilmeldingen findes ikke længere."
+              );
+            }
+
+            if (!eventSnap.exists()) {
+              throw new Error(
+                "Eventet findes ikke længere."
+              );
+            }
+
+            const registrationData =
+              registrationSnap.data();
+
+            const eventData =
+              eventSnap.data();
+
+            const approvedCount =
+              Number(
+                eventData.approvedCount ??
+                  0
+              );
+
+            if (
+              registrationData.status ===
+              "approved"
+            ) {
+              transaction.update(
+                eventRef,
+                {
+                  approvedCount:
+                    Math.max(
+                      0,
+                      approvedCount -
+                        1
+                    ),
+                }
+              );
+            }
+
+            transaction.delete(
+              registrationRef
+            );
+          }
+        );
+      } else {
+        await deleteDoc(
+          doc(
+            db,
+            "registrations",
+            registration.id
+          )
+        );
+      }
+
+      await loadEvents();
+      await loadRegistrations();
+
+      setMsg(
+        isApproved
+          ? "Tilmelding slettet og pladsen frigivet ✓"
+          : "Tilmelding slettet ✓"
+      );
+    } catch (e: any) {
+      setErr(
+        e?.message ??
+          "Tilmeldingen kunne ikke slettes."
+      );
+    }
+  }
+
   if (!loggedIn) {
     return (
       <main
         style={{
           maxWidth: 500,
-          margin:
-            "60px auto",
-          padding:
-            "0 20px",
+          margin: "60px auto",
+          padding: "0 20px",
           fontFamily:
             "system-ui",
         }}
@@ -673,11 +757,9 @@ export default function AdminPage() {
             )
           }
           style={{
-            width:
-              "100%",
+            width: "100%",
             padding: 12,
-            marginBottom:
-              10,
+            marginBottom: 10,
             boxSizing:
               "border-box",
           }}
@@ -693,11 +775,9 @@ export default function AdminPage() {
             )
           }
           style={{
-            width:
-              "100%",
+            width: "100%",
             padding: 12,
-            marginBottom:
-              10,
+            marginBottom: 10,
             boxSizing:
               "border-box",
           }}
@@ -719,10 +799,8 @@ export default function AdminPage() {
   return (
     <main
       style={{
-        maxWidth:
-          1000,
-        margin:
-          "0 auto",
+        maxWidth: 1000,
+        margin: "0 auto",
         padding:
           "30px 20px",
         fontFamily:
@@ -731,14 +809,12 @@ export default function AdminPage() {
     >
       <div
         style={{
-          display:
-            "flex",
+          display: "flex",
           justifyContent:
             "space-between",
           alignItems:
             "center",
-          marginBottom:
-            30,
+          marginBottom: 30,
         }}
       >
         <h1>
@@ -746,9 +822,7 @@ export default function AdminPage() {
         </h1>
 
         <button
-          onClick={
-            logout
-          }
+          onClick={logout}
         >
           Log ud
         </button>
@@ -758,12 +832,10 @@ export default function AdminPage() {
         <div
           style={{
             padding: 12,
-            marginBottom:
-              15,
+            marginBottom: 15,
             background:
               "#e8f5e9",
-            borderRadius:
-              8,
+            borderRadius: 8,
           }}
         >
           {msg}
@@ -774,14 +846,12 @@ export default function AdminPage() {
         <div
           style={{
             padding: 12,
-            marginBottom:
-              15,
+            marginBottom: 15,
             background:
               "#ffebee",
             color:
               "#b71c1c",
-            borderRadius:
-              8,
+            borderRadius: 8,
           }}
         >
           {err}
@@ -792,522 +862,620 @@ export default function AdminPage() {
         Events
       </h2>
 
-      {events.length ===
-      0 ? (
+      {events.length === 0 ? (
         <p>
           Ingen events.
         </p>
       ) : (
-        events.map(
-          (event) => {
-            const eventRegistrations =
-              registrations.filter(
-                (r) =>
-                  r.eventId ===
-                  event.id
-              );
+        events.map((event) => {
+          const eventRegistrations =
+            registrations.filter(
+              (r) =>
+                r.eventId ===
+                event.id
+            );
 
-            const pending =
-              eventRegistrations.filter(
-                (r) =>
-                  r.status ===
-                  "pending"
-              );
+          const pending =
+            eventRegistrations.filter(
+              (r) =>
+                r.status ===
+                "pending"
+            );
 
-            const approved =
-              eventRegistrations.filter(
-                (r) =>
-                  r.status ===
-                  "approved"
-              );
+          const approved =
+            eventRegistrations.filter(
+              (r) =>
+                r.status ===
+                "approved"
+            );
 
-            const rejected =
-              eventRegistrations.filter(
-                (r) =>
-                  r.status ===
-                  "rejected"
-              );
+          const rejected =
+            eventRegistrations.filter(
+              (r) =>
+                r.status ===
+                "rejected"
+            );
 
-            const full =
-              event.maxApproved >
-                0 &&
-              event.approvedCount >=
-                event.maxApproved;
+          const full =
+            event.maxApproved > 0 &&
+            event.approvedCount >=
+              event.maxApproved;
 
-            const isEditing =
-              editingEventId ===
-              event.id;
+          const isEditing =
+            editingEventId ===
+            event.id;
 
-            return (
+          return (
+            <div
+              key={event.id}
+              style={{
+                border:
+                  "1px solid #ccc",
+                borderRadius: 12,
+                padding: 20,
+                marginBottom: 20,
+              }}
+            >
+              {!isEditing ? (
+                <>
+                  <h3
+                    style={{
+                      marginTop: 0,
+                    }}
+                  >
+                    {event.title}
+                  </h3>
+
+                  <div>
+                    <strong>
+                      Dato:
+                    </strong>{" "}
+                    {event.startAt
+                      ? event.startAt
+                          .toDate()
+                          .toLocaleString(
+                            "da-DK"
+                          )
+                      : "Ikke angivet"}
+                  </div>
+
+                  <div>
+                    <strong>
+                      Pladser:
+                    </strong>{" "}
+                    {
+                      event.approvedCount
+                    }{" "}
+                    /{" "}
+                    {
+                      event.maxApproved
+                    }
+                  </div>
+
+                  <div
+                    style={{
+                      marginTop: 8,
+                      fontWeight:
+                        "bold",
+                      color: full
+                        ? "crimson"
+                        : event.isOpen
+                        ? "green"
+                        : "#666",
+                    }}
+                  >
+                    {full
+                      ? "FULDT BOOKET"
+                      : event.isOpen
+                      ? "ÅBEN"
+                      : "LUKKET"}
+                  </div>
+
+                  <div
+                    style={{
+                      marginTop: 12,
+                      display:
+                        "flex",
+                      gap: 8,
+                      flexWrap:
+                        "wrap",
+                    }}
+                  >
+                    <button
+                      onClick={() =>
+                        startEditing(
+                          event
+                        )
+                      }
+                      style={{
+                        padding:
+                          "9px 15px",
+                      }}
+                    >
+                      Rediger
+                    </button>
+
+                    <button
+                      onClick={() =>
+                        toggleEvent(
+                          event
+                        )
+                      }
+                      style={{
+                        padding:
+                          "9px 15px",
+                      }}
+                    >
+                      {event.isOpen
+                        ? "Luk event"
+                        : "Åbn event"}
+                    </button>
+
+                    <button
+                      onClick={() =>
+                        deleteEvent(
+                          event
+                        )
+                      }
+                      style={{
+                        padding:
+                          "9px 15px",
+                        background:
+                          "#d32f2f",
+                        color:
+                          "white",
+                        border:
+                          "none",
+                        borderRadius:
+                          4,
+                        cursor:
+                          "pointer",
+                      }}
+                    >
+                      Slet event
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div>
+                  <h3>
+                    Rediger event
+                  </h3>
+
+                  <input
+                    type="text"
+                    value={
+                      editTitle
+                    }
+                    onChange={(
+                      e
+                    ) =>
+                      setEditTitle(
+                        e.target
+                          .value
+                      )
+                    }
+                    placeholder="Eventnavn"
+                    style={{
+                      width:
+                        "100%",
+                      padding:
+                        10,
+                      marginBottom:
+                        10,
+                      boxSizing:
+                        "border-box",
+                    }}
+                  />
+
+                  <input
+                    type="datetime-local"
+                    value={
+                      editStartAt
+                    }
+                    onChange={(
+                      e
+                    ) =>
+                      setEditStartAt(
+                        e.target
+                          .value
+                      )
+                    }
+                    style={{
+                      width:
+                        "100%",
+                      padding:
+                        10,
+                      marginBottom:
+                        10,
+                      boxSizing:
+                        "border-box",
+                    }}
+                  />
+
+                  <input
+                    type="number"
+                    min={
+                      event.approvedCount
+                    }
+                    value={
+                      editMaxApproved
+                    }
+                    onChange={(
+                      e
+                    ) =>
+                      setEditMaxApproved(
+                        Number(
+                          e.target
+                            .value
+                        )
+                      )
+                    }
+                    style={{
+                      width:
+                        "100%",
+                      padding:
+                        10,
+                      marginBottom:
+                        10,
+                      boxSizing:
+                        "border-box",
+                    }}
+                  />
+
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={
+                        editIsOpen
+                      }
+                      onChange={(
+                        e
+                      ) =>
+                        setEditIsOpen(
+                          e.target
+                            .checked
+                        )
+                      }
+                    />{" "}
+                    Åben for tilmelding
+                  </label>
+
+                  <div
+                    style={{
+                      marginTop:
+                        15,
+                      display:
+                        "flex",
+                      gap: 8,
+                    }}
+                  >
+                    <button
+                      onClick={() =>
+                        saveEventChanges(
+                          event
+                        )
+                      }
+                      disabled={
+                        loading
+                      }
+                      style={{
+                        padding:
+                          "9px 15px",
+                      }}
+                    >
+                      {loading
+                        ? "Gemmer..."
+                        : "Gem ændringer"}
+                    </button>
+
+                    <button
+                      onClick={
+                        cancelEditing
+                      }
+                      style={{
+                        padding:
+                          "9px 15px",
+                      }}
+                    >
+                      Annuller
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div
-                key={
-                  event.id
-                }
                 style={{
-                  border:
-                    "1px solid #ccc",
-                  borderRadius:
-                    12,
-                  padding:
-                    20,
-                  marginBottom:
-                    20,
+                  marginTop: 25,
+                  borderTop:
+                    "1px solid #ddd",
+                  paddingTop: 15,
                 }}
               >
-                {!isEditing ? (
-                  <>
-                    <h3
-                      style={{
-                        marginTop:
-                          0,
-                      }}
-                    >
-                      {
-                        event.title
-                      }
-                    </h3>
+                <h4>
+                  Tilmeldinger
+                </h4>
 
-                    <div>
-                      <strong>
-                        Dato:
-                      </strong>{" "}
-                      {event.startAt
-                        ? event.startAt
-                            .toDate()
-                            .toLocaleString(
-                              "da-DK"
-                            )
-                        : "Ikke angivet"}
-                    </div>
+                <p>
+                  <strong>
+                    Afventer:
+                  </strong>{" "}
+                  {pending.length}
+                  {" | "}
+                  <strong>
+                    Godkendt:
+                  </strong>{" "}
+                  {approved.length}
+                  {" | "}
+                  <strong>
+                    Afvist:
+                  </strong>{" "}
+                  {rejected.length}
+                </p>
 
-                    <div>
-                      <strong>
-                        Pladser:
-                      </strong>{" "}
-                      {
-                        event.approvedCount
-                      }{" "}
-                      /{" "}
-                      {
-                        event.maxApproved
-                      }
-                    </div>
-
+                {pending.map(
+                  (registration) => (
                     <div
+                      key={
+                        registration.id
+                      }
                       style={{
-                        marginTop:
+                        background:
+                          "#fff8e1",
+                        border:
+                          "1px solid #ddd",
+                        borderRadius:
                           8,
-                        fontWeight:
-                          "bold",
-                        color:
-                          full
-                            ? "crimson"
-                            : event.isOpen
-                            ? "green"
-                            : "#666",
-                      }}
-                    >
-                      {full
-                        ? "FULDT BOOKET"
-                        : event.isOpen
-                        ? "ÅBEN"
-                        : "LUKKET"}
-                    </div>
-
-                    <div
-                      style={{
-                        marginTop:
+                        padding:
                           12,
-                        display:
-                          "flex",
-                        gap: 8,
-                        flexWrap:
-                          "wrap",
+                        marginBottom:
+                          8,
                       }}
                     >
-                      <button
-                        onClick={() =>
-                          startEditing(
-                            event
-                          )
+                      <strong>
+                        {
+                          registration.username
                         }
-                        style={{
-                          padding:
-                            "9px 15px",
-                        }}
-                      >
-                        Rediger
-                      </button>
+                      </strong>
 
-                      <button
-                        onClick={() =>
-                          toggleEvent(
-                            event
-                          )
+                      <div>
+                        Telefon:{" "}
+                        {
+                          registration.phone
                         }
-                        style={{
-                          padding:
-                            "9px 15px",
-                        }}
-                      >
-                        {event.isOpen
-                          ? "Luk event"
-                          : "Åbn event"}
-                      </button>
+                      </div>
 
-                      <button
-                        onClick={() =>
-                          deleteEvent(
-                            event
-                          )
-                        }
-                        style={{
-                          padding:
-                            "9px 15px",
-                          background:
-                            "#d32f2f",
-                          color:
-                            "white",
-                          border:
-                            "none",
-                          borderRadius:
-                            4,
-                          cursor:
-                            "pointer",
-                        }}
-                      >
-                        Slet event
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <div>
-                    <h3>
-                      Rediger event
-                    </h3>
-
-                    <input
-                      type="text"
-                      value={
-                        editTitle
-                      }
-                      onChange={(
-                        e
-                      ) =>
-                        setEditTitle(
-                          e.target
-                            .value
-                        )
-                      }
-                      placeholder="Eventnavn"
-                      style={{
-                        width:
-                          "100%",
-                        padding:
-                          10,
-                        marginBottom:
-                          10,
-                        boxSizing:
-                          "border-box",
-                      }}
-                    />
-
-                    <input
-                      type="datetime-local"
-                      value={
-                        editStartAt
-                      }
-                      onChange={(
-                        e
-                      ) =>
-                        setEditStartAt(
-                          e.target
-                            .value
-                        )
-                      }
-                      style={{
-                        width:
-                          "100%",
-                        padding:
-                          10,
-                        marginBottom:
-                          10,
-                        boxSizing:
-                          "border-box",
-                      }}
-                    />
-
-                    <input
-                      type="number"
-                      min={
-                        event.approvedCount
-                      }
-                      value={
-                        editMaxApproved
-                      }
-                      onChange={(
-                        e
-                      ) =>
-                        setEditMaxApproved(
-                          Number(
-                            e.target
-                              .value
-                          )
-                        )
-                      }
-                      style={{
-                        width:
-                          "100%",
-                        padding:
-                          10,
-                        marginBottom:
-                          10,
-                        boxSizing:
-                          "border-box",
-                      }}
-                    />
-
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={
-                          editIsOpen
-                        }
-                        onChange={(
-                          e
-                        ) =>
-                          setEditIsOpen(
-                            e
-                              .target
-                              .checked
-                          )
-                        }
-                      />{" "}
-                      Åben for tilmelding
-                    </label>
-
-                    <div
-                      style={{
-                        marginTop:
-                          15,
-                        display:
-                          "flex",
-                        gap: 8,
-                      }}
-                    >
-                      <button
-                        onClick={() =>
-                          saveEventChanges(
-                            event
-                          )
-                        }
-                        disabled={
-                          loading
-                        }
-                        style={{
-                          padding:
-                            "9px 15px",
-                        }}
-                      >
-                        {loading
-                          ? "Gemmer..."
-                          : "Gem ændringer"}
-                      </button>
-
-                      <button
-                        onClick={
-                          cancelEditing
-                        }
-                        style={{
-                          padding:
-                            "9px 15px",
-                        }}
-                      >
-                        Annuller
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                <div
-                  style={{
-                    marginTop:
-                      25,
-                    borderTop:
-                      "1px solid #ddd",
-                    paddingTop:
-                      15,
-                  }}
-                >
-                  <h4>
-                    Tilmeldinger
-                  </h4>
-
-                  <p>
-                    <strong>
-                      Afventer:
-                    </strong>{" "}
-                    {
-                      pending.length
-                    }
-                    {" | "}
-                    <strong>
-                      Godkendt:
-                    </strong>{" "}
-                    {
-                      approved.length
-                    }
-                    {" | "}
-                    <strong>
-                      Afvist:
-                    </strong>{" "}
-                    {
-                      rejected.length
-                    }
-                  </p>
-
-                  {pending.map(
-                    (
-                      registration
-                    ) => (
                       <div
-                        key={
-                          registration.id
-                        }
                         style={{
-                          background:
-                            "#fff8e1",
-                          border:
-                            "1px solid #ddd",
-                          borderRadius:
-                            8,
-                          padding:
-                            12,
-                          marginBottom:
-                            8,
+                          marginTop: 8,
                         }}
                       >
-                        <strong>
-                          {
-                            registration.username
+                        <button
+                          onClick={() =>
+                            approveRegistration(
+                              registration
+                            )
                           }
-                        </strong>
-
-                        <div>
-                          Telefon:{" "}
-                          {
-                            registration.phone
-                          }
-                        </div>
-
-                        <div
                           style={{
-                            marginTop:
+                            padding:
+                              "8px 12px",
+                            marginRight:
                               8,
                           }}
                         >
-                          <button
-                            onClick={() =>
-                              approveRegistration(
-                                registration
-                              )
-                            }
-                            style={{
-                              padding:
-                                "8px 12px",
-                              marginRight:
-                                8,
-                            }}
-                          >
-                            Godkend
-                          </button>
+                          Godkend
+                        </button>
 
-                          <button
-                            onClick={() =>
-                              rejectRegistration(
-                                registration
-                              )
-                            }
-                            style={{
-                              padding:
-                                "8px 12px",
-                            }}
-                          >
-                            Afvis
-                          </button>
-                        </div>
+                        <button
+                          onClick={() =>
+                            rejectRegistration(
+                              registration
+                            )
+                          }
+                          style={{
+                            padding:
+                              "8px 12px",
+                            marginRight:
+                              8,
+                          }}
+                        >
+                          Afvis
+                        </button>
+
+                        <button
+                          onClick={() =>
+                            deleteRegistration(
+                              registration
+                            )
+                          }
+                          style={{
+                            padding:
+                              "8px 12px",
+                            background:
+                              "#d32f2f",
+                            color:
+                              "white",
+                            border:
+                              "none",
+                            borderRadius:
+                              4,
+                            cursor:
+                              "pointer",
+                          }}
+                        >
+                          Slet tilmelding
+                        </button>
                       </div>
-                    )
-                  )}
+                    </div>
+                  )
+                )}
 
-                  {approved.length >
-                    0 && (
-                    <>
-                      <h4>
-                        Godkendte
-                      </h4>
+                {approved.length >
+                  0 && (
+                  <>
+                    <h4>
+                      Godkendte
+                    </h4>
 
-                      {approved.map(
-                        (
-                          registration
-                        ) => (
-                          <div
-                            key={
-                              registration.id
+                    {approved.map(
+                      (registration) => (
+                        <div
+                          key={
+                            registration.id
+                          }
+                          style={{
+                            background:
+                              "#e8f5e9",
+                            padding:
+                              10,
+                            marginBottom:
+                              6,
+                            borderRadius:
+                              6,
+                          }}
+                        >
+                          <strong>
+                            {
+                              registration.username
                             }
+                          </strong>
+
+                          {" – "}
+
+                          {
+                            registration.phone
+                          }
+
+                          <div
                             style={{
-                              background:
-                                "#e8f5e9",
-                              padding:
-                                10,
-                              marginBottom:
-                                6,
-                              borderRadius:
-                                6,
+                              marginTop: 8,
                             }}
                           >
-                            <strong>
-                              {
-                                registration.username
+                            <button
+                              onClick={() =>
+                                deleteRegistration(
+                                  registration
+                                )
                               }
-                            </strong>
-                            {" – "}
-                            {
-                              registration.phone
-                            }
+                              style={{
+                                padding:
+                                  "7px 11px",
+                                background:
+                                  "#d32f2f",
+                                color:
+                                  "white",
+                                border:
+                                  "none",
+                                borderRadius:
+                                  4,
+                                cursor:
+                                  "pointer",
+                              }}
+                            >
+                              Slet tilmelding
+                            </button>
                           </div>
-                        )
-                      )}
-                    </>
-                  )}
-
-                  {pending.length ===
-                    0 &&
-                    approved.length ===
-                      0 &&
-                    rejected.length ===
-                      0 && (
-                      <p>
-                        Ingen tilmeldinger
-                        til dette event.
-                      </p>
+                        </div>
+                      )
                     )}
-                </div>
+                  </>
+                )}
+
+                {rejected.length >
+                  0 && (
+                  <>
+                    <h4>
+                      Afviste
+                    </h4>
+
+                    {rejected.map(
+                      (registration) => (
+                        <div
+                          key={
+                            registration.id
+                          }
+                          style={{
+                            background:
+                              "#ffebee",
+                            padding:
+                              10,
+                            marginBottom:
+                              6,
+                            borderRadius:
+                              6,
+                          }}
+                        >
+                          <strong>
+                            {
+                              registration.username
+                            }
+                          </strong>
+
+                          {" – "}
+
+                          {
+                            registration.phone
+                          }
+
+                          <div
+                            style={{
+                              marginTop: 8,
+                            }}
+                          >
+                            <button
+                              onClick={() =>
+                                deleteRegistration(
+                                  registration
+                                )
+                              }
+                              style={{
+                                padding:
+                                  "7px 11px",
+                                background:
+                                  "#d32f2f",
+                                color:
+                                  "white",
+                                border:
+                                  "none",
+                                borderRadius:
+                                  4,
+                                cursor:
+                                  "pointer",
+                              }}
+                            >
+                              Slet tilmelding
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    )}
+                  </>
+                )}
+
+                {pending.length ===
+                  0 &&
+                  approved.length ===
+                    0 &&
+                  rejected.length ===
+                    0 && (
+                    <p>
+                      Ingen tilmeldinger
+                      til dette event.
+                    </p>
+                  )}
               </div>
-            );
-          }
-        )
+            </div>
+          );
+        })
       )}
 
       <section
         style={{
           border:
             "1px solid #ddd",
-          borderRadius:
-            10,
+          borderRadius: 10,
           padding: 20,
-          marginTop:
-            40,
+          marginTop: 40,
         }}
       >
         <h2>
