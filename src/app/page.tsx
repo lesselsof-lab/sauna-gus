@@ -161,7 +161,6 @@ export default function HomePage() {
     }
 
     try {
-      // Firebase Phone Auth bruger +45XXXXXXXX
       const firebasePhone = user.phoneNumber;
 
       const registrationsQuery = query(
@@ -512,8 +511,6 @@ export default function HomePage() {
         return;
       }
 
-      // Gem ALTID telefonnummeret i samme format
-      // som Firebase Phone Authentication.
       const firebasePhone =
         toFirebasePhone(phone);
 
@@ -603,8 +600,6 @@ export default function HomePage() {
                 username:
                   username.trim(),
 
-                // VIGTIGT:
-                // +4520123460
                 phone:
                   firebasePhone,
 
@@ -664,13 +659,8 @@ export default function HomePage() {
             registration.id
           );
 
-        const eventRef =
-          doc(
-            db,
-            "events",
-            registration.eventId
-          );
-
+        // Kunden sletter KUN sin egen tilmelding.
+        // Eventet ændres ikke af kunden.
         await runTransaction(
           db,
           async (transaction) => {
@@ -687,44 +677,6 @@ export default function HomePage() {
               );
             }
 
-            const registrationData =
-              registrationSnap.data();
-
-            if (
-              registrationData.status ===
-              "approved"
-            ) {
-              const eventSnap =
-                await transaction.get(
-                  eventRef
-                );
-
-              if (
-                eventSnap.exists()
-              ) {
-                const eventData =
-                  eventSnap.data();
-
-                const approvedCount =
-                  Number(
-                    eventData.approvedCount ??
-                      0
-                  );
-
-                transaction.update(
-                  eventRef,
-                  {
-                    approvedCount:
-                      Math.max(
-                        0,
-                        approvedCount -
-                          1
-                      ),
-                  }
-                );
-              }
-            }
-
             transaction.delete(
               registrationRef
             );
@@ -738,6 +690,8 @@ export default function HomePage() {
         await loadMyRegistrations();
         await loadEvents();
       } catch (e: any) {
+        console.error(e);
+
         setError(
           e?.message ??
             "Afmeldingen kunne ikke gennemføres."
