@@ -5,10 +5,11 @@ import { useEffect, useRef, useState } from "react";
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
-  query,
   runTransaction,
   Timestamp,
+  query,
   where,
 } from "firebase/firestore";
 
@@ -22,6 +23,13 @@ import {
 
 import { auth, db } from "../lib/firebase";
 
+type UserProfile = {
+  uid: string;
+  username: string;
+  phone: string;
+  createdAt?: Timestamp;
+};
+
 type EventDoc = {
   title?: string;
   isOpen?: boolean;
@@ -30,7 +38,7 @@ type EventDoc = {
   approvedCount?: number;
 };
 
-type Event = {
+type EventItem = {
   id: string;
   title: string;
   isOpen: boolean;
@@ -41,37 +49,35 @@ type Event = {
 
 type Registration = {
   id: string;
+  uid: string;
   eventId: string;
   eventTitle: string;
   username: string;
   phone: string;
   status: "pending" | "approved" | "rejected";
+  createdAt?: Timestamp;
 };
 
-function normalizePhone(phone: string): string {
-  const digits = phone.replace(/\D/g, "");
+function normalizePhone(phone: string) {
+  return phone.replace(/\D/g, "");
+}
+
+function toFirebasePhone(phone: string) {
+  const digits = normalizePhone(phone);
 
   if (digits.startsWith("45") && digits.length === 10) {
-    return digits.substring(2);
+    return `+${digits}`;
   }
 
-  return digits;
+  if (digits.length === 8) {
+    return `+45${digits}`;
+  }
+
+  return "";
 }
 
-function toFirebasePhone(phone: string): string {
-  const localPhone = normalizePhone(phone);
-
-  if (localPhone.length !== 8) {
-    return "";
-  }
-
-  return `+45${localPhone}`;
-}
-
-function formatDate(timestamp?: Timestamp): string {
-  if (!timestamp) {
-    return "";
-  }
+function formatDate(timestamp?: Timestamp) {
+  if (!timestamp) return "";
 
   return timestamp.toDate().toLocaleString("da-DK", {
     dateStyle: "short",
@@ -80,28 +86,25 @@ function formatDate(timestamp?: Timestamp): string {
 }
 
 export default function HomePage() {
-  const [events, setEvents] = useState<Event[]>([]);
-  const [selectedEvent, setSelectedEvent] = useState("");
+  const [user, setUser] = useState<UserProfile | null>(null);
+  const [loading, setLoading] = useState(true);
 
+  const [events, setEvents] = useState<EventItem[]>([]);
+  const [registrations, setRegistrations] = useState<Registration[]>([]);
+
+  const [loginPhone, setLoginPhone] = useState("");
   const [username, setUsername] = useState("");
-  const [phone, setPhone] = useState("");
+
+  const [code, setCode] = useState("");
+
+  const [smsSent, setSmsSent] = useState(false);
+  const [creatingUser, setCreatingUser] = useState(false);
+  const [sendingCode, setSendingCode] = useState(false);
+
+  const [pendingUsername, setPendingUsername] = useState("");
 
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-
-  const [loggedIn, setLoggedIn] = useState(false);
-
-  const [showLogin, setShowLogin] = useState(false);
-  const [loginPhone, setLoginPhone] = useState("");
-  const [verificationCode, setVerificationCode] = useState("");
-  const [codeSent, setCodeSent] = useState(false);
-
-  const [loggingIn, setLoggingIn] = useState(false);
-  const [sending, setSending] = useState(false);
-
-  const [myRegistrations, setMyRegistrations] = useState<
-    Registration[]
-  >([]);
 
   const confirmationResult =
     useRef<ConfirmationResult | null>(null);
@@ -109,268 +112,229 @@ export default function HomePage() {
   const recaptchaVerifier =
     useRef<RecaptchaVerifier | null>(null);
 
-  const eventsTimer =
-    useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const registrationsTimer =
-    useRef<ReturnType<typeof setInterval> | null>(null);
-
   /*
-   * Hent åbne events
+   * --------------------------------------------------
+   * LOGIN-STATUS
+   * --------------------------------------------------
    */
-  const loadEvents = async () => {
-    try {
-      const snapshot = await getDocs(
-        collection(db, "events")
-      );
 
-      const loadedEvents: Event[] = snapshot.docs
-        .map((eventDoc) => {
-          const data =
-            eventDoc.data() as EventDoc;
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(
+      auth,
+      async (firebaseUser) => {
+        setLoading(true);
 
-          return {
-            id: eventDoc.id,
-            title: data.title ?? "Uden titel",
-            isOpen: Boolean(data.isOpen),
-            startAt: data.startAt,
-            maxApproved: Number(
-              data.maxApproved ?? 0
-            ),
-            approvedCount: Number(
-              data.approvedCount ?? 0
-            ),
-          };
-        })
-        .filter((event) => event.isOpen)
-        .sort((a, b) => {
-          const aTime =
-            a.startAt?.toMillis() ?? 0;
+        if (!firebaseUser) {
+          setUser(null);
+          setEvents([]);
+          setRegistrations([]);
+          setLoading(false);
+          return;
+        }
 
-          const bTime =
-            b.startAt?.toMillis() ?? 0;
-
-          return aTime - bTime;
-        });
-
-      setEvents(loadedEvents);
-
-      if (loadedEvents.length === 0) {
-        setSelectedEvent("");
-        return;
-      }
-
-      setSelectedEvent((current) => {
-        const stillExists =
-          loadedEvents.some(
-            (event) => event.id === current
+        try {
+          const userRef = doc(
+            db,
+            "users",
+            firebaseUser.uid
           );
 
-        return stillExists
-          ? current
-          : loadedEvents[0].id;
-      });
+          const userSnapshot =
+            await getDoc(userRef);
+
+          if (userSnapshot.exists()) {
+            const data =
+              userSnapshot.data();
+
+            setUser({
+              uid: firebaseUser.uid,
+              username: data.username,
+              phone: data.phone,
+              createdAt: data.createdAt,
+            });
+
+            await loadEvents();
+            await loadRegistrations();
+          } else {
+            /*
+             * SMS-login er gennemført,
+             * men brugeren mangler profil.
+             *
+             * Derfor viser vi oprettelse
+             * af brugernavn.
+             */
+            setUser(null);
+          }
+        } catch (e: any) {
+          console.error(e);
+
+          setError(
+            "Der opstod en fejl ved hentning af din brugerprofil."
+          );
+        } finally {
+          setLoading(false);
+        }
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
+
+  /*
+   * --------------------------------------------------
+   * EVENTS
+   * --------------------------------------------------
+   */
+
+  async function loadEvents() {
+    if (!auth.currentUser) {
+      setEvents([]);
+      return;
+    }
+
+    try {
+      const snapshot =
+        await getDocs(
+          collection(db, "events")
+        );
+
+      const result: EventItem[] =
+        snapshot.docs
+          .map((eventDoc) => {
+            const data =
+              eventDoc.data() as EventDoc;
+
+            return {
+              id: eventDoc.id,
+              title:
+                data.title ?? "Uden titel",
+              isOpen:
+                Boolean(data.isOpen),
+              startAt:
+                data.startAt,
+              maxApproved:
+                Number(
+                  data.maxApproved ?? 0
+                ),
+              approvedCount:
+                Number(
+                  data.approvedCount ?? 0
+                ),
+            };
+          })
+          .filter(
+            (event) => event.isOpen
+          )
+          .sort((a, b) => {
+            const aTime =
+              a.startAt?.toMillis() ?? 0;
+
+            const bTime =
+              b.startAt?.toMillis() ?? 0;
+
+            return aTime - bTime;
+          });
+
+      setEvents(result);
     } catch (e: any) {
       console.error(e);
 
       setError(
-        e?.message ??
-          "Kunne ikke hente events."
+        "Kunne ikke hente events."
       );
     }
-  };
+  }
 
   /*
-   * Hent kundens egne tilmeldinger
+   * --------------------------------------------------
+   * MINE TILMELDINGER
+   * --------------------------------------------------
    */
-  const loadMyRegistrations = async () => {
-    const user = auth.currentUser;
 
-    if (!user?.phoneNumber) {
-      setMyRegistrations([]);
+  async function loadRegistrations() {
+    const firebaseUser =
+      auth.currentUser;
+
+    if (!firebaseUser) {
+      setRegistrations([]);
       return;
     }
 
     try {
-      const registrationsQuery = query(
-        collection(db, "registrations"),
-        where(
-          "phone",
-          "==",
-          user.phoneNumber
-        )
-      );
+      const registrationsQuery =
+        query(
+          collection(
+            db,
+            "registrations"
+          ),
+          where(
+            "uid",
+            "==",
+            firebaseUser.uid
+          )
+        );
 
-      const snapshot = await getDocs(
-        registrationsQuery
-      );
+      const snapshot =
+        await getDocs(
+          registrationsQuery
+        );
 
-      const registrations: Registration[] =
-        snapshot.docs.map((registrationDoc) => {
-          const data =
-            registrationDoc.data();
+      const result: Registration[] =
+        snapshot.docs.map(
+          (registrationDoc) => {
+            const data =
+              registrationDoc.data();
 
-          return {
-            id: registrationDoc.id,
-            eventId:
-              data.eventId ?? "",
-            eventTitle:
-              data.eventTitle ??
-              "Uden titel",
-            username:
-              data.username ?? "",
-            phone:
-              data.phone ?? "",
-            status:
-              data.status ?? "pending",
-          };
-        });
+            return {
+              id:
+                registrationDoc.id,
+              uid:
+                data.uid,
+              eventId:
+                data.eventId,
+              eventTitle:
+                data.eventTitle,
+              username:
+                data.username,
+              phone:
+                data.phone,
+              status:
+                data.status,
+              createdAt:
+                data.createdAt,
+            };
+          }
+        );
 
-      setMyRegistrations(registrations);
+      setRegistrations(result);
     } catch (e: any) {
-      console.error(
-        "Fejl ved hentning af tilmeldinger:",
-        e
-      );
+      console.error(e);
 
       setError(
-        e?.message ??
-          "Kunne ikke hente dine tilmeldinger."
+        "Kunne ikke hente dine tilmeldinger."
       );
     }
-  };
+  }
 
   /*
-   * Login-status
+   * --------------------------------------------------
+   * SMS
+   * --------------------------------------------------
    */
-  useEffect(() => {
-    loadEvents();
 
-    eventsTimer.current =
-      setInterval(
-        loadEvents,
-        5000
-      );
-
-    const unsubscribe =
-      onAuthStateChanged(
-        auth,
-        async (user) => {
-          if (user) {
-            setLoggedIn(true);
-
-            await loadMyRegistrations();
-
-            if (
-              registrationsTimer.current
-            ) {
-              clearInterval(
-                registrationsTimer.current
-              );
-            }
-
-            registrationsTimer.current =
-              setInterval(
-                loadMyRegistrations,
-                5000
-              );
-          } else {
-            setLoggedIn(false);
-            setMyRegistrations([]);
-
-            if (
-              registrationsTimer.current
-            ) {
-              clearInterval(
-                registrationsTimer.current
-              );
-
-              registrationsTimer.current =
-                null;
-            }
-          }
-        }
-      );
-
-    return () => {
-      unsubscribe();
-
-      if (eventsTimer.current) {
-        clearInterval(
-          eventsTimer.current
-        );
-      }
-
-      if (
-        registrationsTimer.current
-      ) {
-        clearInterval(
-          registrationsTimer.current
-        );
-      }
-
-      if (
-        recaptchaVerifier.current
-      ) {
-        try {
-          recaptchaVerifier.current.clear();
-        } catch {}
-
-        recaptchaVerifier.current =
-          null;
-      }
-    };
-  }, []);
-
-  /*
-   * Åbn login
-   */
-  const openLogin = () => {
-    setMessage("");
-    setError("");
-
-    setLoginPhone("");
-    setVerificationCode("");
-    setCodeSent(false);
-
-    setShowLogin(true);
-  };
-
-  /*
-   * Luk login
-   */
-  const closeLogin = () => {
-    setShowLogin(false);
-
-    setLoginPhone("");
-    setVerificationCode("");
-    setCodeSent(false);
-
-    confirmationResult.current =
-      null;
-
-    if (
-      recaptchaVerifier.current
-    ) {
+  function clearRecaptcha() {
+    if (recaptchaVerifier.current) {
       try {
         recaptchaVerifier.current.clear();
       } catch {}
 
-      recaptchaVerifier.current =
-        null;
+      recaptchaVerifier.current = null;
     }
-  };
+  }
 
-  /*
-   * Send SMS-login
-   */
-  const sendLoginCode = async () => {
-    if (loggingIn) {
-      return;
-    }
-
-    setMessage("");
+  async function sendCode() {
     setError("");
+    setMessage("");
 
     const firebasePhone =
       toFirebasePhone(loginPhone);
@@ -382,19 +346,17 @@ export default function HomePage() {
       return;
     }
 
-    setLoggingIn(true);
+    if (creatingUser && !username.trim()) {
+      setError(
+        "Indtast det brugernavn, du vil bruge i logen."
+      );
+      return;
+    }
+
+    setSendingCode(true);
 
     try {
-      if (
-        recaptchaVerifier.current
-      ) {
-        try {
-          recaptchaVerifier.current.clear();
-        } catch {}
-
-        recaptchaVerifier.current =
-          null;
-      }
+      clearRecaptcha();
 
       recaptchaVerifier.current =
         new RecaptchaVerifier(
@@ -402,12 +364,6 @@ export default function HomePage() {
           "recaptcha-container",
           {
             size: "normal",
-            callback: () => {},
-            "expired-callback": () => {
-              setError(
-                "Sikkerhedstjekket er udløbet. Prøv igen."
-              );
-            },
           }
         );
 
@@ -421,7 +377,13 @@ export default function HomePage() {
       confirmationResult.current =
         result;
 
-      setCodeSent(true);
+      if (creatingUser) {
+        setPendingUsername(
+          username.trim()
+        );
+      }
+
+      setSmsSent(true);
 
       setMessage(
         "SMS-koden er sendt."
@@ -431,500 +393,939 @@ export default function HomePage() {
 
       setError(
         e?.message ??
-          "SMS-koden kunne ikke sendes."
+          "Kunne ikke sende SMS-koden."
       );
 
-      if (
-        recaptchaVerifier.current
-      ) {
-        try {
-          recaptchaVerifier.current.clear();
-        } catch {}
-
-        recaptchaVerifier.current =
-          null;
-      }
+      clearRecaptcha();
     } finally {
-      setLoggingIn(false);
+      setSendingCode(false);
     }
-  };
+  }
 
   /*
-   * Bekræft SMS-kode
+   * --------------------------------------------------
+   * BEKRÆFT SMS
+   * --------------------------------------------------
    */
-  const confirmLogin = async () => {
-    if (loggingIn) {
-      return;
-    }
 
-    setMessage("");
+  async function confirmCode() {
     setError("");
+    setMessage("");
 
-    if (
-      !confirmationResult.current
-    ) {
+    if (!confirmationResult.current) {
       setError(
         "Send først en SMS-kode."
       );
       return;
     }
 
-    if (
-      verificationCode.trim().length === 0
-    ) {
+    if (!code.trim()) {
       setError(
         "Indtast SMS-koden."
       );
       return;
     }
 
-    setLoggingIn(true);
-
     try {
-      await confirmationResult.current.confirm(
-        verificationCode.trim()
+      const credential =
+        await confirmationResult.current.confirm(
+          code.trim()
+        );
+
+      const firebaseUser =
+        credential.user;
+
+      const userRef = doc(
+        db,
+        "users",
+        firebaseUser.uid
       );
+
+      const userSnapshot =
+        await getDoc(userRef);
+
+      /*
+       * EKSISTERENDE BRUGER
+       */
+      if (userSnapshot.exists()) {
+        const data =
+          userSnapshot.data();
+
+        setUser({
+          uid: firebaseUser.uid,
+          username: data.username,
+          phone: data.phone,
+          createdAt:
+            data.createdAt,
+        });
+
+        setMessage(
+          `Velkommen tilbage, ${data.username}!`
+        );
+
+        await loadEvents();
+        await loadRegistrations();
+      }
+
+      /*
+       * NY BRUGER
+       */
+      else {
+        const finalUsername =
+          pendingUsername.trim();
+
+        if (!finalUsername) {
+          setError(
+            "Der mangler et brugernavn."
+          );
+          return;
+        }
+
+        /*
+         * Kontroller at brugernavnet
+         * ikke allerede bruges.
+         */
+        const usernameQuery =
+          query(
+            collection(
+              db,
+              "users"
+            ),
+            where(
+              "username",
+              "==",
+              finalUsername
+            )
+          );
+
+        const usernameSnapshot =
+          await getDocs(
+            usernameQuery
+          );
+
+        if (
+          !usernameSnapshot.empty
+        ) {
+          setError(
+            "Det brugernavn er allerede taget. Vælg et andet."
+          );
+
+          await signOut(auth);
+
+          return;
+        }
+
+        const profile: UserProfile =
+          {
+            uid:
+              firebaseUser.uid,
+
+            username:
+              finalUsername,
+
+            phone:
+              firebaseUser
+                .phoneNumber ?? "",
+
+            createdAt:
+              Timestamp.now(),
+          };
+
+        await runTransaction(
+          db,
+          async (transaction) => {
+            transaction.set(
+              userRef,
+              profile
+            );
+          }
+        );
+
+        setUser(profile);
+
+        setMessage(
+          `Velkommen ${finalUsername}! Du er nu medlem af logen.`
+        );
+
+        await loadEvents();
+        await loadRegistrations();
+      }
 
       confirmationResult.current =
         null;
 
-      setLoggedIn(true);
-      setShowLogin(false);
-      setCodeSent(false);
-      setVerificationCode("");
+      clearRecaptcha();
 
-      if (
-        recaptchaVerifier.current
-      ) {
-        try {
-          recaptchaVerifier.current.clear();
-        } catch {}
-
-        recaptchaVerifier.current =
-          null;
-      }
-
-      setMessage(
-        "Du er nu logget ind."
-      );
-
-      await loadMyRegistrations();
+      setCode("");
+      setSmsSent(false);
+      setPendingUsername("");
     } catch (e: any) {
       console.error(e);
 
       setError(
         "SMS-koden er forkert eller udløbet."
       );
-    } finally {
-      setLoggingIn(false);
     }
-  };
+  }
 
   /*
-   * Log ud
+   * --------------------------------------------------
+   * LOG UD
+   * --------------------------------------------------
    */
-  const logout = async () => {
+
+  async function logout() {
     try {
       await signOut(auth);
 
-      setLoggedIn(false);
-      setMyRegistrations([]);
+      setUser(null);
+      setEvents([]);
+      setRegistrations([]);
 
       setMessage(
         "Du er logget ud."
       );
     } catch (e: any) {
       setError(
-        e?.message ??
-          "Kunne ikke logge ud."
+        "Kunne ikke logge ud."
       );
     }
-  };
+  }
 
   /*
-   * Opret tilmelding
+   * --------------------------------------------------
+   * TILMELDING
+   * --------------------------------------------------
    */
-  const submitRegistration =
-    async () => {
-      if (sending) {
-        return;
-      }
 
-      setMessage("");
-      setError("");
+  async function registerForEvent(
+    event: EventItem
+  ) {
+    setError("");
+    setMessage("");
 
-      if (!selectedEvent) {
-        setError(
-          "Vælg et event."
-        );
-        return;
-      }
+    const firebaseUser =
+      auth.currentUser;
 
-      if (!username.trim()) {
-        setError(
-          "Indtast dit brugernavn."
-        );
-        return;
-      }
+    if (!firebaseUser || !user) {
+      setError(
+        "Du skal være logget ind."
+      );
+      return;
+    }
 
-      if (!phone.trim()) {
-        setError(
-          "Indtast dit telefonnummer."
-        );
-        return;
-      }
+    const registrationId =
+      `${event.id}_${firebaseUser.uid}`;
 
-      const firebasePhone =
-        toFirebasePhone(phone);
+    const registrationRef =
+      doc(
+        db,
+        "registrations",
+        registrationId
+      );
 
-      if (!firebasePhone) {
-        setError(
-          "Indtast et gyldigt dansk telefonnummer på 8 cifre."
-        );
-        return;
-      }
-
-      const event =
-        events.find(
-          (item) =>
-            item.id === selectedEvent
-        );
-
-      if (!event) {
-        setError(
-          "Det valgte event blev ikke fundet."
-        );
-        return;
-      }
-
-      setSending(true);
-
-      try {
-        /*
-         * Tjek dublet.
-         */
-        const existingQuery =
-          query(
-            collection(
+    try {
+      await runTransaction(
+        db,
+        async (transaction) => {
+          const eventRef =
+            doc(
               db,
-              "registrations"
-            ),
-            where(
-              "phone",
-              "==",
-              firebasePhone
-            ),
-            where(
-              "eventId",
-              "==",
+              "events",
               event.id
-            )
-          );
+            );
 
-        const existingSnapshot =
-          await getDocs(
-            existingQuery
-          );
+          const eventSnapshot =
+            await transaction.get(
+              eventRef
+            );
 
-        if (
-          !existingSnapshot.empty
-        ) {
-          setError(
-            "Du er allerede tilmeldt dette event."
-          );
-          setSending(false);
-          return;
-        }
-
-        /*
-         * Tjek plads.
-         *
-         * approvedCount ændres IKKE her.
-         * Pladsen tæller først, når admin
-         * godkender tilmeldingen.
-         */
-        if (
-          event.maxApproved > 0 &&
-          event.approvedCount >=
-            event.maxApproved
-        ) {
-          setError(
-            "Eventet er fuldt booket."
-          );
-          setSending(false);
-          return;
-        }
-
-        /*
-         * Opret tilmeldingen.
-         */
-        await runTransaction(
-          db,
-          async (transaction) => {
-            const eventRef =
-              doc(
-                db,
-                "events",
-                event.id
-              );
-
-            const eventSnapshot =
-              await transaction.get(
-                eventRef
-              );
-
-            if (
-              !eventSnapshot.exists()
-            ) {
-              throw new Error(
-                "Eventet findes ikke længere."
-              );
-            }
-
-            const eventData =
-              eventSnapshot.data() as EventDoc;
-
-            if (
-              !eventData.isOpen
-            ) {
-              throw new Error(
-                "Eventet er ikke længere åbent."
-              );
-            }
-
-            const approvedCount =
-              Number(
-                eventData.approvedCount ??
-                  0
-              );
-
-            const maxApproved =
-              Number(
-                eventData.maxApproved ??
-                  0
-              );
-
-            if (
-              maxApproved > 0 &&
-              approvedCount >=
-                maxApproved
-            ) {
-              throw new Error(
-                "Eventet er fuldt booket."
-              );
-            }
-
-            const registrationRef =
-              doc(
-                collection(
-                  db,
-                  "registrations"
-                )
-              );
-
-            transaction.set(
-              registrationRef,
-              {
-                eventId:
-                  event.id,
-
-                eventTitle:
-                  eventData.title ??
-                  event.title,
-
-                username:
-                  username.trim(),
-
-                phone:
-                  firebasePhone,
-
-                status:
-                  "pending",
-
-                createdAt:
-                  Timestamp.now(),
-              }
+          if (
+            !eventSnapshot.exists()
+          ) {
+            throw new Error(
+              "Eventet findes ikke længere."
             );
           }
-        );
 
-        setMessage(
-          "Tak! Din tilmelding er modtaget og afventer godkendelse."
-        );
+          const eventData =
+            eventSnapshot.data() as EventDoc;
 
-        setUsername("");
-        setPhone("");
+          if (
+            eventData.isOpen !== true
+          ) {
+            throw new Error(
+              "Eventet er ikke længere åbent."
+            );
+          }
 
-        await loadEvents();
+          const maxApproved =
+            Number(
+              eventData.maxApproved ?? 0
+            );
 
-        if (loggedIn) {
-          await loadMyRegistrations();
-        }
-      } catch (e: any) {
-        console.error(e);
+          const approvedCount =
+            Number(
+              eventData.approvedCount ?? 0
+            );
 
-        setError(
-          e?.message ??
-            "Tilmeldingen kunne ikke sendes."
-        );
-      } finally {
-        setSending(false);
-      }
-    };
+          if (
+            maxApproved > 0 &&
+            approvedCount >=
+              maxApproved
+          ) {
+            throw new Error(
+              "Eventet er fuldt booket."
+            );
+          }
 
-  /*
-   * Afmeld kunde
-   *
-   * Kunden sletter KUN sin egen tilmelding.
-   * Kunden ændrer ikke events eller approvedCount.
-   */
-  const cancelRegistration =
-    async (
-      registration: Registration
-    ) => {
-      const confirmed =
-        window.confirm(
-          `Er du sikker på, at du vil afmelde dig fra "${registration.eventTitle}"?`
-        );
-
-      if (!confirmed) {
-        return;
-      }
-
-      setMessage("");
-      setError("");
-
-      try {
-        const registrationRef =
-          doc(
-            db,
-            "registrations",
-            registration.id
-          );
-
-        await runTransaction(
-          db,
-          async (transaction) => {
-            const snapshot =
-              await transaction.get(
-                registrationRef
-              );
-
-            if (
-              !snapshot.exists()
-            ) {
-              throw new Error(
-                "Tilmeldingen findes ikke længere."
-              );
-            }
-
-            const data =
-              snapshot.data();
-
-            /*
-             * Ekstra sikkerhed i klienten.
-             *
-             * Vi kontrollerer, at den tilmelding
-             * faktisk tilhører den bruger, der
-             * forsøger at slette den.
-             */
-            const currentUser =
-              auth.currentUser;
-
-            if (
-              !currentUser?.phoneNumber
-            ) {
-              throw new Error(
-                "Du skal være logget ind."
-              );
-            }
-
-            if (
-              data.phone !==
-              currentUser.phoneNumber
-            ) {
-              throw new Error(
-                "Du kan kun afmelde dine egne tilmeldinger."
-              );
-            }
-
-            transaction.delete(
+          const existing =
+            await transaction.get(
               registrationRef
             );
+
+          if (existing.exists()) {
+            throw new Error(
+              "Du er allerede tilmeldt dette event."
+            );
           }
+
+          transaction.set(
+            registrationRef,
+            {
+              uid:
+                firebaseUser.uid,
+
+              eventId:
+                event.id,
+
+              eventTitle:
+                eventData.title ??
+                event.title,
+
+              username:
+                user.username,
+
+              phone:
+                firebaseUser
+                  .phoneNumber ?? "",
+
+              status:
+                "pending",
+
+              createdAt:
+                Timestamp.now(),
+            }
+          );
+        }
+      );
+
+      setMessage(
+        `Din tilmelding til "${event.title}" er sendt og afventer godkendelse.`
+      );
+
+      await loadEvents();
+      await loadRegistrations();
+    } catch (e: any) {
+      console.error(e);
+
+      setError(
+        e?.message ??
+          "Tilmeldingen kunne ikke gennemføres."
+      );
+    }
+  }
+
+  /*
+   * --------------------------------------------------
+   * AFMELDING
+   * --------------------------------------------------
+   */
+
+  async function cancelRegistration(
+    registration: Registration
+  ) {
+    if (!auth.currentUser) {
+      setError(
+        "Du skal være logget ind."
+      );
+      return;
+    }
+
+    const confirmed =
+      window.confirm(
+        `Vil du afmelde dig fra "${registration.eventTitle}"?`
+      );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      const registrationRef =
+        doc(
+          db,
+          "registrations",
+          registration.id
         );
 
-        setMessage(
-          "Du er nu afmeldt."
-        );
+      await runTransaction(
+        db,
+        async (transaction) => {
+          const snapshot =
+            await transaction.get(
+              registrationRef
+            );
 
-        await loadMyRegistrations();
-        await loadEvents();
-      } catch (e: any) {
-        console.error(e);
+          if (
+            !snapshot.exists()
+          ) {
+            throw new Error(
+              "Tilmeldingen findes ikke længere."
+            );
+          }
 
-        setError(
-          e?.message ??
-            "Afmeldingen kunne ikke gennemføres."
-        );
-      }
-    };
+          const data =
+            snapshot.data();
 
-  return (
-    <main
-      style={{
-        maxWidth: 700,
-        margin: "40px auto",
-        padding: "0 20px",
-        fontFamily: "system-ui",
-      }}
-    >
-      <div
+          if (
+            data.uid !==
+            auth.currentUser?.uid
+          ) {
+            throw new Error(
+              "Du kan kun afmelde dine egne tilmeldinger."
+            );
+          }
+
+          transaction.delete(
+            registrationRef
+          );
+        }
+      );
+
+      setMessage(
+        "Du er nu afmeldt."
+      );
+
+      await loadEvents();
+      await loadRegistrations();
+    } catch (e: any) {
+      console.error(e);
+
+      setError(
+        e?.message ??
+          "Afmeldingen kunne ikke gennemføres."
+      );
+    }
+  }
+
+  /*
+   * --------------------------------------------------
+   * LOADING
+   * --------------------------------------------------
+   */
+
+  if (loading) {
+    return (
+      <main
         style={{
-          display: "flex",
-          justifyContent:
-            "space-between",
-          alignItems: "center",
-          gap: 15,
-          marginBottom: 25,
+          maxWidth: 650,
+          margin: "80px auto",
+          padding: 20,
+          fontFamily:
+            "system-ui, sans-serif",
+          textAlign: "center",
         }}
       >
         <h1>
           Saunagus
         </h1>
 
-        {!loggedIn ? (
-          <button
-            onClick={
-              openLogin
-            }
+        <p>
+          Kontrollerer adgang...
+        </p>
+      </main>
+    );
+  }
+
+  /*
+   * --------------------------------------------------
+   * LOGIN / OPRET BRUGER
+   * --------------------------------------------------
+   */
+
+  if (!user) {
+    return (
+      <main
+        style={{
+          maxWidth: 500,
+          margin: "70px auto",
+          padding: 25,
+          fontFamily:
+            "system-ui, sans-serif",
+        }}
+      >
+        <div
+          style={{
+            textAlign: "center",
+            marginBottom: 35,
+          }}
+        >
+          <h1
             style={{
-              padding:
-                "10px 15px",
+              fontSize: 38,
+              marginBottom: 8,
             }}
           >
-            Mine tilmeldinger
-          </button>
-        ) : (
-          <button
-            onClick={
-              logout
-            }
+            Saunagus
+          </h1>
+
+          <p>
+            Privat loge
+          </p>
+
+          <p
             style={{
-              padding:
-                "10px 15px",
+              color: "#666",
             }}
           >
-            Log ud
-          </button>
-        )}
-      </div>
+            Du skal være logget ind
+            for at få adgang.
+          </p>
+        </div>
+
+        <div
+          style={{
+            border:
+              "1px solid #ddd",
+            borderRadius: 12,
+            padding: 25,
+          }}
+        >
+          {!creatingUser ? (
+            <>
+              <h2>
+                Log ind
+              </h2>
+
+              {!smsSent ? (
+                <>
+                  <p>
+                    Indtast dit
+                    telefonnummer.
+                  </p>
+
+                  <input
+                    type="tel"
+                    placeholder="Telefonnummer"
+                    value={
+                      loginPhone
+                    }
+                    onChange={(e) =>
+                      setLoginPhone(
+                        e.target.value
+                      )
+                    }
+                    style={{
+                      width:
+                        "100%",
+                      padding: 12,
+                      marginBottom:
+                        15,
+                      boxSizing:
+                        "border-box",
+                    }}
+                  />
+
+                  <div
+                    id="recaptcha-container"
+                    style={{
+                      marginBottom:
+                        15,
+                    }}
+                  />
+
+                  <button
+                    onClick={
+                      sendCode
+                    }
+                    disabled={
+                      sendingCode
+                    }
+                    style={{
+                      width:
+                        "100%",
+                      padding: 13,
+                    }}
+                  >
+                    {sendingCode
+                      ? "Sender..."
+                      : "Send SMS-kode"}
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setCreatingUser(
+                        true
+                      );
+                      setError("");
+                      setMessage("");
+                    }}
+                    style={{
+                      width:
+                        "100%",
+                      padding: 13,
+                      marginTop: 10,
+                    }}
+                  >
+                    Opret ny bruger
+                  </button>
+                </>
+              ) : (
+                <>
+                  <p>
+                    Indtast den
+                    SMS-kode, du har
+                    modtaget.
+                  </p>
+
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={6}
+                    placeholder="SMS-kode"
+                    value={code}
+                    onChange={(e) =>
+                      setCode(
+                        e.target.value.replace(
+                          /\D/g,
+                          ""
+                        )
+                      )
+                    }
+                    style={{
+                      width:
+                        "100%",
+                      padding: 12,
+                      marginBottom:
+                        15,
+                      boxSizing:
+                        "border-box",
+                    }}
+                  />
+
+                  <button
+                    onClick={
+                      confirmCode
+                    }
+                    style={{
+                      width:
+                        "100%",
+                      padding: 13,
+                    }}
+                  >
+                    Bekræft og log ind
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setSmsSent(
+                        false
+                      );
+                      setCode("");
+                      confirmationResult.current =
+                        null;
+                      clearRecaptcha();
+                    }}
+                    style={{
+                      width:
+                        "100%",
+                      padding: 13,
+                      marginTop: 10,
+                    }}
+                  >
+                    Tilbage
+                  </button>
+                </>
+              )}
+            </>
+          ) : (
+            <>
+              <h2>
+                Opret bruger
+              </h2>
+
+              {!smsSent ? (
+                <>
+                  <p>
+                    Du skal bruge et
+                    brugernavn og dit
+                    telefonnummer.
+                  </p>
+
+                  <input
+                    type="text"
+                    placeholder="Dit brugernavn"
+                    value={
+                      username
+                    }
+                    onChange={(e) =>
+                      setUsername(
+                        e.target.value
+                      )
+                    }
+                    style={{
+                      width:
+                        "100%",
+                      padding: 12,
+                      marginBottom:
+                        10,
+                      boxSizing:
+                        "border-box",
+                    }}
+                  />
+
+                  <input
+                    type="tel"
+                    placeholder="Telefonnummer"
+                    value={
+                      loginPhone
+                    }
+                    onChange={(e) =>
+                      setLoginPhone(
+                        e.target.value
+                      )
+                    }
+                    style={{
+                      width:
+                        "100%",
+                      padding: 12,
+                      marginBottom:
+                        15,
+                      boxSizing:
+                        "border-box",
+                    }}
+                  />
+
+                  <div
+                    id="recaptcha-container"
+                    style={{
+                      marginBottom:
+                        15,
+                    }}
+                  />
+
+                  <button
+                    onClick={
+                      sendCode
+                    }
+                    disabled={
+                      sendingCode
+                    }
+                    style={{
+                      width:
+                        "100%",
+                      padding: 13,
+                    }}
+                  >
+                    {sendingCode
+                      ? "Sender..."
+                      : "Send SMS-kode"}
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setCreatingUser(
+                        false
+                      );
+                      setError("");
+                      setMessage("");
+                    }}
+                    style={{
+                      width:
+                        "100%",
+                      padding: 13,
+                      marginTop: 10,
+                    }}
+                  >
+                    Jeg har allerede en bruger
+                  </button>
+                </>
+              ) : (
+                <>
+                  <p>
+                    Vi har sendt en
+                    SMS-kode til dit
+                    telefonnummer.
+                  </p>
+
+                  <p>
+                    Brugernavn:{" "}
+                    <strong>
+                      {
+                        pendingUsername
+                      }
+                    </strong>
+                  </p>
+
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={6}
+                    placeholder="SMS-kode"
+                    value={code}
+                    onChange={(e) =>
+                      setCode(
+                        e.target.value.replace(
+                          /\D/g,
+                          ""
+                        )
+                      )
+                    }
+                    style={{
+                      width:
+                        "100%",
+                      padding: 12,
+                      marginBottom:
+                        15,
+                      boxSizing:
+                        "border-box",
+                    }}
+                  />
+
+                  <button
+                    onClick={
+                      confirmCode
+                    }
+                    style={{
+                      width:
+                        "100%",
+                      padding: 13,
+                    }}
+                  >
+                    Opret bruger
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setSmsSent(
+                        false
+                      );
+                      setCode("");
+                      confirmationResult.current =
+                        null;
+                      clearRecaptcha();
+                    }}
+                    style={{
+                      width:
+                        "100%",
+                      padding: 13,
+                      marginTop: 10,
+                    }}
+                  >
+                    Tilbage
+                  </button>
+                </>
+              )}
+            </>
+          )}
+
+          {message && (
+            <p
+              style={{
+                color: "green",
+                fontWeight:
+                  "bold",
+                marginTop: 20,
+              }}
+            >
+              {message}
+            </p>
+          )}
+
+          {error && (
+            <p
+              style={{
+                color: "crimson",
+                fontWeight:
+                  "bold",
+                marginTop: 20,
+              }}
+            >
+              {error}
+            </p>
+          )}
+        </div>
+      </main>
+    );
+  }
+
+  /*
+   * --------------------------------------------------
+   * LOGGET IND
+   * --------------------------------------------------
+   */
+
+  return (
+    <main
+      style={{
+        maxWidth: 700,
+        margin: "40px auto",
+        padding: "0 20px 60px",
+        fontFamily:
+          "system-ui, sans-serif",
+      }}
+    >
+      <header
+        style={{
+          display: "flex",
+          justifyContent:
+            "space-between",
+          alignItems: "center",
+          gap: 15,
+          marginBottom: 30,
+        }}
+      >
+        <div>
+          <h1
+            style={{
+              marginBottom: 4,
+            }}
+          >
+            Saunagus
+          </h1>
+
+          <div
+            style={{
+              color: "#666",
+            }}
+          >
+            Velkommen{" "}
+            <strong>
+              {user.username}
+            </strong>
+          </div>
+        </div>
+
+        <button
+          onClick={
+            logout
+          }
+          style={{
+            padding:
+              "10px 15px",
+          }}
+        >
+          Log ud
+        </button>
+      </header>
 
       {message && (
         <p
           style={{
             color: "green",
-            fontWeight: "bold",
+            fontWeight:
+              "bold",
           }}
         >
           {message}
@@ -935,306 +1336,138 @@ export default function HomePage() {
         <p
           style={{
             color: "crimson",
-            fontWeight: "bold",
+            fontWeight:
+              "bold",
           }}
         >
           {error}
         </p>
       )}
 
-      {showLogin && (
-        <section
-          style={{
-            border:
-              "1px solid #ddd",
-            borderRadius: 10,
-            padding: 20,
-            marginBottom: 30,
-          }}
-        >
-          <h2>
-            Log ind
-          </h2>
+      <section
+        style={{
+          marginBottom: 35,
+        }}
+      >
+        <h2>
+          Mine tilmeldinger
+        </h2>
 
-          {!codeSent ? (
-            <>
-              <p>
-                Indtast dit
-                telefonnummer.
-                Du får en
-                engangskode
-                på SMS.
-              </p>
-
-              <input
-                type="tel"
-                placeholder="Telefonnummer"
-                value={
-                  loginPhone
-                }
-                onChange={(
-                  e
-                ) =>
-                  setLoginPhone(
-                    e.target.value
-                  )
-                }
-                style={{
-                  width:
-                    "100%",
-                  padding: 10,
-                  marginBottom:
-                    15,
-                  boxSizing:
-                    "border-box",
-                }}
-              />
-
+        {registrations.length ===
+        0 ? (
+          <div
+            style={{
+              border:
+                "1px solid #ddd",
+              borderRadius: 10,
+              padding: 18,
+            }}
+          >
+            Du har ingen
+            tilmeldinger endnu.
+          </div>
+        ) : (
+          registrations.map(
+            (registration) => (
               <div
-                id="recaptcha-container"
-                style={{
-                  marginBottom:
-                    15,
-                }}
-              />
-
-              <button
-                onClick={
-                  sendLoginCode
-                }
-                disabled={
-                  loggingIn
+                key={
+                  registration.id
                 }
                 style={{
-                  padding:
-                    "10px 20px",
-                  marginRight:
-                    10,
+                  border:
+                    "1px solid #ddd",
+                  borderRadius: 10,
+                  padding: 18,
+                  marginBottom: 10,
                 }}
               >
-                {loggingIn
-                  ? "Sender..."
-                  : "Send SMS-kode"}
-              </button>
-
-              <button
-                onClick={
-                  closeLogin
-                }
-                style={{
-                  padding:
-                    "10px 20px",
-                }}
-              >
-                Annuller
-              </button>
-            </>
-          ) : (
-            <>
-              <p>
-                Indtast koden,
-                du har modtaget
-                på SMS.
-              </p>
-
-              <input
-                type="text"
-                inputMode="numeric"
-                maxLength={6}
-                placeholder="SMS-kode"
-                value={
-                  verificationCode
-                }
-                onChange={(
-                  e
-                ) =>
-                  setVerificationCode(
-                    e.target.value.replace(
-                      /\D/g,
-                      ""
-                    )
-                  )
-                }
-                style={{
-                  width:
-                    "100%",
-                  padding: 10,
-                  marginBottom:
-                    15,
-                  boxSizing:
-                    "border-box",
-                }}
-              />
-
-              <button
-                onClick={
-                  confirmLogin
-                }
-                disabled={
-                  loggingIn
-                }
-                style={{
-                  padding:
-                    "10px 20px",
-                  marginRight:
-                    10,
-                }}
-              >
-                {loggingIn
-                  ? "Logger ind..."
-                  : "Log ind"}
-              </button>
-
-              <button
-                onClick={() => {
-                  setCodeSent(
-                    false
-                  );
-
-                  setVerificationCode(
-                    ""
-                  );
-
-                  confirmationResult.current =
-                    null;
-
-                  if (
-                    recaptchaVerifier.current
-                  ) {
-                    try {
-                      recaptchaVerifier.current.clear();
-                    } catch {}
-
-                    recaptchaVerifier.current =
-                      null;
+                <strong>
+                  {
+                    registration.eventTitle
                   }
-                }}
-                style={{
-                  padding:
-                    "10px 20px",
-                }}
-              >
-                Nyt nummer
-              </button>
-            </>
-          )}
-        </section>
-      )}
+                </strong>
 
-      {loggedIn && (
-        <section
-          style={{
-            border:
-              "1px solid #ddd",
-            borderRadius: 10,
-            padding: 20,
-            marginBottom: 35,
-          }}
-        >
-          <h2>
-            Mine tilmeldinger
-          </h2>
-
-          {myRegistrations.length ===
-          0 ? (
-            <p>
-              Du har ingen
-              aktive
-              tilmeldinger.
-            </p>
-          ) : (
-            myRegistrations.map(
-              (
-                registration
-              ) => (
                 <div
-                  key={
-                    registration.id
-                  }
                   style={{
-                    border:
-                      "1px solid #ddd",
-                    borderRadius: 8,
-                    padding: 15,
-                    marginBottom: 10,
+                    marginTop: 7,
                   }}
                 >
+                  Status:{" "}
                   <strong>
-                    {
-                      registration.eventTitle
-                    }
+                    {registration.status ===
+                    "approved"
+                      ? "Godkendt"
+                      : registration.status ===
+                        "pending"
+                      ? "Afventer godkendelse"
+                      : "Afvist"}
                   </strong>
+                </div>
 
-                  <div
+                {registration.status !==
+                  "rejected" && (
+                  <button
+                    onClick={() =>
+                      cancelRegistration(
+                        registration
+                      )
+                    }
                     style={{
-                      marginTop: 6,
+                      marginTop: 12,
+                      padding:
+                        "9px 15px",
+                      background:
+                        "#d32f2f",
+                      color:
+                        "white",
+                      border:
+                        "none",
+                      borderRadius:
+                        5,
                     }}
                   >
-                    Status:{" "}
-                    <strong>
-                      {registration.status ===
-                      "approved"
-                        ? "Godkendt"
-                        : registration.status ===
-                          "pending"
-                        ? "Afventer godkendelse"
-                        : "Afvist"}
-                    </strong>
-                  </div>
-
-                  {registration.status !==
-                    "rejected" && (
-                    <button
-                      onClick={() =>
-                        cancelRegistration(
-                          registration
-                        )
-                      }
-                      style={{
-                        marginTop: 12,
-                        padding:
-                          "9px 15px",
-                        background:
-                          "#d32f2f",
-                        color:
-                          "white",
-                        border:
-                          "none",
-                        borderRadius:
-                          4,
-                        cursor:
-                          "pointer",
-                      }}
-                    >
-                      Afmeld
-                    </button>
-                  )}
-                </div>
-              )
+                    Afmeld
+                  </button>
+                )}
+              </div>
             )
-          )}
-        </section>
-      )}
+          )
+        )}
+      </section>
 
-      <h2>
-        Åbne events
-      </h2>
+      <section>
+        <h2>
+          Åbne events
+        </h2>
 
-      {events.length ===
-      0 ? (
-        <p>
-          Ingen åbne events
-          lige nu.
-        </p>
-      ) : (
-        <>
-          {events.map(
+        {events.length ===
+        0 ? (
+          <div
+            style={{
+              border:
+                "1px solid #ddd",
+              borderRadius: 10,
+              padding: 18,
+            }}
+          >
+            Der er ingen åbne
+            events lige nu.
+          </div>
+        ) : (
+          events.map(
             (event) => {
               const full =
                 event.maxApproved >
                   0 &&
                 event.approvedCount >=
                   event.maxApproved;
+
+              const alreadyRegistered =
+                registrations.some(
+                  (registration) =>
+                    registration.eventId ===
+                    event.id
+                );
 
               return (
                 <div
@@ -1244,16 +1477,21 @@ export default function HomePage() {
                   style={{
                     border:
                       "1px solid #ddd",
-                    padding: 15,
-                    marginBottom: 10,
-                    borderRadius: 8,
+                    borderRadius: 10,
+                    padding: 18,
+                    marginBottom: 12,
                   }}
                 >
-                  <strong>
+                  <h3
+                    style={{
+                      margin:
+                        "0 0 6px",
+                    }}
+                  >
                     {
                       event.title
                     }
-                  </strong>
+                  </h3>
 
                   {event.startAt && (
                     <div>
@@ -1280,159 +1518,53 @@ export default function HomePage() {
                     }
                   </div>
 
-                  {full && (
+                  {full ? (
                     <div
                       style={{
-                        marginTop: 5,
                         color:
                           "crimson",
                         fontWeight:
                           "bold",
+                        marginTop: 8,
                       }}
                     >
                       FULDT BOOKET
                     </div>
+                  ) : alreadyRegistered ? (
+                    <div
+                      style={{
+                        color:
+                          "green",
+                        fontWeight:
+                          "bold",
+                        marginTop: 8,
+                      }}
+                    >
+                      Du er allerede
+                      tilmeldt
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() =>
+                        registerForEvent(
+                          event
+                        )
+                      }
+                      style={{
+                        marginTop: 12,
+                        padding:
+                          "10px 18px",
+                      }}
+                    >
+                      Tilmeld mig
+                    </button>
                   )}
                 </div>
               );
             }
-          )}
-
-          <h2>
-            Tilmeld dig
-          </h2>
-
-          <select
-            value={
-              selectedEvent
-            }
-            onChange={(e) =>
-              setSelectedEvent(
-                e.target.value
-              )
-            }
-            style={{
-              width: "100%",
-              padding: 10,
-              marginBottom: 10,
-            }}
-          >
-            {events.map(
-              (event) => {
-                const full =
-                  event.maxApproved >
-                    0 &&
-                  event.approvedCount >=
-                    event.maxApproved;
-
-                return (
-                  <option
-                    key={
-                      event.id
-                    }
-                    value={
-                      event.id
-                    }
-                    disabled={
-                      full
-                    }
-                  >
-                    {
-                      event.title
-                    }
-                    {full
-                      ? " – FULDT BOOKET"
-                      : ""}
-                  </option>
-                );
-              }
-            )}
-          </select>
-
-          <input
-            type="text"
-            placeholder="Brugernavn"
-            value={
-              username
-            }
-            onChange={(e) =>
-              setUsername(
-                e.target.value
-              )
-            }
-            style={{
-              width:
-                "100%",
-              padding: 10,
-              marginBottom: 10,
-              boxSizing:
-                "border-box",
-            }}
-          />
-
-          <input
-            type="tel"
-            placeholder="Telefonnummer"
-            value={
-              phone
-            }
-            onChange={(e) =>
-              setPhone(
-                e.target.value
-              )
-            }
-            style={{
-              width:
-                "100%",
-              padding: 10,
-              marginBottom: 10,
-              boxSizing:
-                "border-box",
-            }}
-          />
-
-          <button
-            onClick={
-              submitRegistration
-            }
-            disabled={
-              sending ||
-              (() => {
-                const event =
-                  events.find(
-                    (item) =>
-                      item.id ===
-                      selectedEvent
-                  );
-
-                return Boolean(
-                  event &&
-                    event.maxApproved >
-                      0 &&
-                    event.approvedCount >=
-                      event.maxApproved
-                );
-              })()
-            }
-            style={{
-              padding:
-                "10px 20px",
-              cursor:
-                sending
-                  ? "not-allowed"
-                  : "pointer",
-              opacity:
-                sending
-                  ? 0.5
-                  : 1,
-            }}
-          >
-            {sending
-              ? "Sender..."
-              : "Send tilmelding"}
-          </button>
-        </>
-      )}
+          )
+        )}
+      </section>
     </main>
   );
 }
